@@ -1,0 +1,32 @@
+// Colors
+$primary-color: #007bff;
+$success-color: #28a745;
+$error-color: #dc3545;
+$warning-color: #ffc107;
+$info-color: #17a2b8;
+$text-color: #333333;
+$secondary-text-color: #6c757d;
+$border-color: #dee2e6;
+$light-bg-color: #f8f9fa;
+$card-bg-color: #ffffff;
+
+// Shadows
+$box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+$box-shadow-elevated: 0 5px 15px rgba(0, 0, 0, 0.1);
+
+// Border radius
+$border-radius: 4px;
+$border-radius-lg: 8px;
+
+// Typography
+$font-family: 'Rubik', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+$font-size-base: 16px;
+$font-size-sm: 14px;
+$font-size-lg: 18px;
+$font-weight-normal: 400;
+$font-weight-bold: 500;
+$font-weight-bolder: 700;
+
+// Transitions
+$transition-base: all 0.2s ease;
+$transition-fade: opacity 0.15s linear; 

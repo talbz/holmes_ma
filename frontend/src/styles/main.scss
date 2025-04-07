@@ -1,0 +1,714 @@
+// Import variables and mixins
+@use 'sass:color';
+@use 'variables' as *;
+
+// Import component-specific styles
+@forward 'toast';
+
+// Base styles
+body {
+  margin: 0;
+  font-family: $font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f5f5;
+}
+
+.App {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: $font-family;
+  direction: rtl; /* For Hebrew text */
+  
+  &.App-crawling {
+    .crawler-status {
+      border-color: $warning-color;
+      animation: pulse 2s infinite;
+    }
+  }
+  
+  &.App-disconnected {
+    .connection-status {
+      animation: flash 1s infinite;
+    }
+  }
+}
+
+// Header styles
+.App-header {
+  text-align: center;
+  margin-bottom: 30px;
+  position: relative;
+  
+  h1 {
+    color: $text-color;
+  }
+}
+
+// Connection status
+.connection-status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: $font-size-sm;
+  padding: 8px 12px;
+  border-radius: 20px;
+  background-color: $light-bg-color;
+  border: 1px solid $border-color;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  
+  .status-connected {
+    color: $success-color;
+    font-weight: $font-weight-bold;
+  }
+  
+  .status-disconnected {
+    color: $error-color;
+    font-weight: $font-weight-bold;
+  }
+  
+  .status-error {
+    color: $warning-color;
+    font-weight: $font-weight-bold;
+  }
+}
+
+// Controls section
+.controls {
+  margin-bottom: 30px;
+  background-color: $light-bg-color;
+  padding: 20px;
+  border-radius: $border-radius;
+  
+  .crawl-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+  }
+  
+  /* Crawl Buttons */
+  .crawl-button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: $border-radius;
+    cursor: pointer;
+    font-size: $font-size-base;
+    font-weight: $font-weight-bold;
+    transition: $transition-base;
+
+    &.start-button {
+      background-color: #28a745;
+      color: white;
+      
+      &:hover:not(:disabled) {
+        background-color: color.adjust(#28a745, $lightness: -10%);
+      }
+    }
+    
+    &.stop-button {
+      background-color: #dc3545;
+      color: white;
+      
+      &:hover:not(:disabled) {
+        background-color: color.adjust(#dc3545, $lightness: -10%);
+      }
+    }
+    
+    &.retry-button {
+       background-color: #ffc107;
+       color: #333;
+       
+       &:hover:not(:disabled) {
+          background-color: color.adjust(#ffc107, $lightness: -10%);
+       }
+    }
+    
+    &:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+  }
+}
+
+// Filters
+.filters {
+  background-color: $light-bg-color;
+  padding: 20px;
+  border-radius: $border-radius;
+  margin-bottom: 20px;
+  
+  .filter-group {
+    margin-bottom: 15px;
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: $text-color;
+      font-weight: $font-weight-bold;
+    }
+    
+    input, select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid $border-color;
+      border-radius: $border-radius;
+      font-size: $font-size-base;
+      
+      &:focus {
+        outline: none;
+        border-color: $primary-color;
+        box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
+      }
+    }
+  }
+  
+  .days-filter {
+    margin-top: 15px; 
+
+    > label {
+      margin-bottom: 5px;
+      display: block; 
+      font-weight: $font-weight-bold;
+    }
+
+    .checkbox-group {
+      display: flex; 
+      flex-wrap: wrap; 
+      gap: 4px 10px;
+      padding: 8px 10px;
+      border: 1px solid $border-color; 
+      border-radius: $border-radius;
+      background-color: white;
+      align-items: center;
+    }
+
+    .checkbox-item {
+      display: flex; 
+      align-items: center;
+      margin: 0; 
+      padding: 2px 0; 
+
+      input[type="checkbox"] {
+        margin: 0 4px 0 0;
+        order: 2;
+        cursor: pointer;
+      }
+
+      label {
+        margin: 0; 
+        cursor: pointer;
+        font-size: $font-size-sm; 
+        white-space: nowrap; 
+        line-height: 1.2; 
+        padding: 0;
+        order: 1;
+      }
+
+      &.all-days-checkbox {
+         margin-right: 10px;
+         padding-right: 10px;
+         border-right: 1px solid #ccc;
+         margin-left: 0;
+         padding-left: 0;
+         border-left: none;
+         label {
+             font-weight: $font-weight-bold;
+         }
+      }
+    }
+  }
+  
+  .filter-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: $border-radius;
+      cursor: pointer;
+      font-weight: $font-weight-bold;
+      transition: $transition-base;
+      
+      &.apply-filters {
+        background-color: $primary-color;
+        color: white;
+        
+        &:hover {
+          background-color: color.adjust($primary-color, $lightness: -10%);
+        }
+      }
+      
+      &.reset-filters {
+        background-color: $light-bg-color;
+        color: $text-color;
+        border: 1px solid $border-color;
+        
+        &:hover {
+          background-color: color.adjust($light-bg-color, $lightness: -5%);
+        }
+      }
+    }
+  }
+}
+
+// Classes container
+.classes-container {
+  background-color: $light-bg-color;
+  padding: 20px;
+  border-radius: $border-radius;
+  
+  h2 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    font-size: 1.5em;
+    border-bottom: 2px solid $border-color;
+  }
+  
+  .loading-message, .error-message, .empty-message {
+    text-align: center;
+    padding: 20px;
+    color: $text-color;
+  }
+  
+  .error-message {
+    color: $error-color;
+  }
+}
+
+.classes-grouped-list {
+  .region-group {
+    margin-bottom: 12px;
+  }
+
+  .region-title {
+    background-color: darken($light-bg-color, 5%);
+    color: $secondary-text-color;
+    padding: 5px 8px;
+    margin-top: 0;
+    margin-bottom: 6px;
+    font-size: 1.2em;
+    border-radius: $border-radius;
+    border-bottom: 1px solid $border-color;
+  }
+
+  .clubs-container-for-region {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-left: 8px;
+    margin-bottom: 10px;
+  }
+
+  .club-group {
+    margin-bottom: 0;
+    flex: 1 1 250px;
+    min-width: 220px;
+  }
+
+  .club-title {
+    margin-top: 0;
+    margin-bottom: 4px;
+    font-size: 1.05em;
+    color: darken($text-color, 10%);
+    padding-bottom: 2px;
+    border-bottom: 1px dashed #ccc;
+  }
+
+  .classes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 6px;
+  }
+
+  .class-card {
+    padding: 3px 5px;
+    font-size: 0.9em;
+    line-height: 1.2;
+    border-width: 1px;
+    margin: 0;
+    background-color: $card-bg-color;
+    border: 1px solid $border-color;
+    border-radius: $border-radius;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+    transition: transform 0.15s;
+
+    &:hover {
+      box-shadow: 0 2px 4px rgba(0,0,0,0.12);
+      transform: translateY(-2px);
+    }
+
+    // --- Line 1 Styling --- 
+    p.class-card-line1 {
+      margin: 0 0 1px 0;
+      padding: 0;
+      font-size: 1.1em;
+      white-space: nowrap; 
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.25;
+
+      span.time {
+        font-weight: bold;
+        color: $primary-color; 
+        margin-left: 5px;
+      }
+      span.day-name {
+         color: $text-color;
+         margin-left: 5px;
+      }
+      span.date-dm {
+          color: $text-color;
+      }
+      span.past-indicator {
+          font-size: 0.8em; 
+          font-style: italic;
+          font-weight: normal; 
+          color: lighten($error-color, 8%);
+          margin-right: 4px;
+      }
+    }
+    
+    // --- Line 2 Styling --- 
+    p.class-card-line2 {
+      margin: 0;
+      padding: 0;
+      font-size: 0.9em;
+      white-space: nowrap; 
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: $secondary-text-color;
+      line-height: 1.1;
+      
+      span.name {
+          // Name is default style for the line
+      }
+      span.instructor {
+           color: darken($secondary-text-color, 10%);
+      }
+    }
+
+    // Style for past class card overall (adjust dimming for new structure)
+    &.class-card--past {
+        opacity: 0.6; 
+        background-color: #f8f8f8; 
+        border-color: #e0e0e0;
+        box-shadow: none; 
+        
+        // Dim line 1
+        p.class-card-line1 {
+             color: lighten($secondary-text-color, 25%);
+             span.time {
+                 color: lighten($primary-color, 45%); 
+                 font-weight: normal; 
+             }
+             span.past-indicator {
+                 color: lighten($error-color, 30%); 
+             }
+        }
+        // Dim line 2
+        p.class-card-line2 {
+             color: lighten($secondary-text-color, 25%);
+             span.instructor {
+                 color: lighten($secondary-text-color, 20%);
+             }
+        }
+    }
+  }
+}
+
+// Crawler Status Styles
+.crawler-status {
+  background-color: #e9ecef;
+  border-radius: $border-radius;
+  padding: 15px;
+  margin: 20px 0;
+  border: 2px solid $primary-color;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+  transition: $transition-base;
+  
+  h3 {
+    margin-top: 0;
+    color: $secondary-text-color;
+    border-bottom: 1px solid $border-color;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+  }
+  
+  .status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    
+    .status-message {
+      font-weight: $font-weight-bold;
+      color: $secondary-text-color;
+      padding: 8px;
+      border-radius: $border-radius;
+      background-color: $light-bg-color;
+    }
+    
+    .status-detail {
+      font-size: $font-size-sm;
+      padding: 6px 10px;
+      background-color: $card-bg-color;
+      border-radius: $border-radius;
+      border-left: 3px solid $primary-color;
+    }
+    
+    .progress-bar-container {
+      height: 20px;
+      background-color: #e2e2e2;
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+      margin-top: 10px;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+      
+      .progress-bar {
+        height: 100%;
+        transition: width 0.3s ease;
+        background-size: 40px 40px;
+        animation: progress-bar-stripes 2s linear infinite;
+        
+        &.progress-low {
+          background-color: $warning-color;
+        }
+        
+        &.progress-medium {
+          background-color: $info-color;
+        }
+        
+        &.progress-high {
+          background-color: $success-color;
+        }
+        
+        background-image: linear-gradient(
+          45deg, 
+          rgba(255, 255, 255, 0.15) 25%, 
+          transparent 25%, 
+          transparent 50%, 
+          rgba(255, 255, 255, 0.15) 50%, 
+          rgba(255, 255, 255, 0.15) 75%, 
+          transparent 75%, 
+          transparent
+        );
+      }
+      
+      .progress-text {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #000;
+        font-weight: $font-weight-bold;
+        font-size: 12px;
+        text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+      }
+    }
+  }
+}
+
+// Clubs List Styles
+.clubs-list {
+  margin-bottom: 20px;
+  
+  h3 {
+    margin-top: 0;
+    color: $text-color;
+    border-bottom: 2px solid $border-color;
+    padding-bottom: 10px;
+  }
+}
+
+.clubs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 15px;
+}
+
+/* Club Item Styles */
+.club-item {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin: 5px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background-color: #fff;
+}
+
+.club-item:hover {
+  background-color: #f5f5f5;
+}
+
+.club-item.club-item-selected {
+  background-color: #e3f2fd;
+  border-color: #2196f3;
+}
+
+.club-item.club-item-processing {
+  background-color: #fff3e0;
+  border-color: #ff9800;
+  font-weight: bold;
+}
+
+.club-item.club-item-success {
+  background-color: #e8f5e9;
+  border-color: #4caf50;
+}
+
+.club-item.club-item-failed {
+  background-color: #ffebee;
+  border-color: #f44336;
+  opacity: 0.7;
+}
+
+// Animations
+@keyframes progress-bar-stripes {
+  from {
+    background-position: 40px 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba($warning-color, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba($warning-color, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba($warning-color, 0);
+  }
+}
+
+@keyframes flash {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// Responsive styles
+@media (max-width: 768px) {
+  .filter-row {
+    flex-direction: column;
+  }
+  
+  .filter-group {
+    margin-bottom: 10px;
+  }
+  
+  .classes-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .clubs-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+}
+
+.crawl-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px; /* Space between button and toggle */
+  margin-bottom: 15px;
+}
+
+.headless-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px; /* Space between switch and text */
+}
+
+/* The switch - adapted from W3Schools */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px; /* Smaller width */
+  height: 24px; /* Smaller height */
+}
+
+/* Hide default HTML checkbox */
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* The slider */
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px; /* Smaller handle */
+  width: 18px;  /* Smaller handle */
+  left: 3px;   /* Adjust position */
+  bottom: 3px;  /* Adjust position */
+  background-color: white;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3; /* Blue when checked (Headless = ON) */
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  transform: translateX(26px); /* Adjust distance for smaller switch */
+}
+
+/* Rounded sliders */
+.slider.round {
+  border-radius: 24px; /* Adjust for height */
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+// End of file 
