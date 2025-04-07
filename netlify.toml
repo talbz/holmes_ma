@@ -1,0 +1,16 @@
+# Netlify Build Settings for Frontend
+
+[build]
+  base    = "frontend/"      # Change current directory to 'frontend'
+  command = "npm run build" # Command to build the frontend
+  publish = "frontend/dist" # Directory with the build output relative to root
+
+# Optional: Specify Node.js version if needed 
+# [build.environment]
+#  NODE_VERSION = "18" # Or your preferred Node version
+
+# Redirects and Rewrites (for Single Page Apps)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200 
