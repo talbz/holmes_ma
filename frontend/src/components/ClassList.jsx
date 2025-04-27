@@ -2,131 +2,109 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import { memo } from 'react';
 import classNames from 'classnames';
+import '../styles/ClassList.scss'; // Import component-specific styles
+import { MdLocationOn, MdAccessTime, MdPerson } from 'react-icons/md';
+import { format, parseISO } from 'date-fns';
+import { he } from 'date-fns/locale';
+
+// Club name mapping to short names
+const clubShortNames = {
+  'הולמס פלייס אשדוד': 'אשדוד',
+  'הולמס פלייס באר שבע': 'באר שבע',
+  'הולמס פלייס גבעתיים': 'גבעתיים',
+  'הולמס פלייס הרצליה': 'הרצליה',
+  'הולמס פלייס חולון': 'חולון',
+  'הולמס פלייס חיפה': 'חיפה',
+  'הולמס פלייס ירושלים': 'ירושלים',
+  'הולמס פלייס כפר סבא': 'כפר סבא',
+  'הולמס פלייס מודיעין': 'מודיעין',
+  'הולמס פלייס נהריה': 'נהריה',
+  'הולמס פלייס נתניה': 'נתניה',
+  'הולמס פלייס עפולה': 'עפולה',
+  'הולמס פלייס פתח תקווה': 'פתח תקווה',
+  'הולמס פלייס ראשון לציון': 'ראשון לציון',
+  'הולמס פלייס רחובות': 'רחובות',
+  'הולמס פלייס רמת גן': 'רמת גן',
+  'הולמס פלייס רעננה': 'רעננה',
+  'הולמס פלייס תל אביב': 'תל אביב'
+};
 
 // Assuming classes is an array like [{ name: ..., time: ..., club: ..., region: ... }, ...]
 // And regions is a sorted array like ["צפון", "מרכז", "דרום", ...]
-export const ClassList = memo(({ classes = [], regions = [] }) => {
+// Added clubStatuses to the props
+export const ClassList = memo(({ classes = [], regions = [], clubStatuses = {}, openingHours = {} }) => {
 
-  // Group classes by region first
-  const classesByRegion = classes.reduce((acc, currentClass) => {
-    const region = currentClass.region || 'לא ידוע';
+  // Group classes by region and day
+  const groupedClasses = classes.reduce((acc, cls) => {
+    const region = cls.region || 'לא ידוע';
+    const day = cls.day_name_hebrew || 'לא ידוע';
+    
     if (!acc[region]) {
-      acc[region] = [];
+      acc[region] = {};
     }
-    acc[region].push(currentClass);
+    if (!acc[region][day]) {
+      acc[region][day] = [];
+    }
+    
+    acc[region][day].push(cls);
     return acc;
   }, {});
 
-  // Group classes by club within each region
-  const groupedClasses = {};
-  regions.forEach(region => {
-    if (classesByRegion[region]) {
-       groupedClasses[region] = classesByRegion[region].reduce((acc, currentClass) => {
-          const club = currentClass.club || 'לא ידוע';
-          if (!acc[club]) {
-              acc[club] = [];
-          }
-          acc[club].push(currentClass);
-          // Sort classes within each club by Day (YYYY-MM-DD) then Time (HH:MM)
-          acc[club].sort((a, b) => {
-              const dayCompare = (a.day || '').localeCompare(b.day || '');
-              if (dayCompare !== 0) {
-                  return dayCompare;
-              }
-              // If days are the same, compare by time
-              return (a.time || '').localeCompare(b.time || '');
-          });
-          return acc;
-       }, {});
-    }
+  // Sort classes by time within each day
+  Object.keys(groupedClasses).forEach(region => {
+    Object.keys(groupedClasses[region]).forEach(day => {
+      groupedClasses[region][day].sort((a, b) => {
+        const timeA = a.time ? a.time.split(':').map(Number) : [0, 0];
+        const timeB = b.time ? b.time.split(':').map(Number) : [0, 0];
+        return timeA[0] * 60 + timeA[1] - (timeB[0] * 60 + timeB[1]);
+      });
+    });
   });
 
-  if (!classes || classes.length === 0) {
+  // Extract all clubs from the classes
+  const clubsWithData = new Set(classes.map(cls => cls.club));
+
+  // Check for selected clubs with no data due to failed crawls
+  const failedSelectedClubs = Object.entries(clubStatuses)
+    .filter(([clubName, status]) => 
+      status === 'failed' && !clubsWithData.has(clubName)
+    )
+    .map(([clubName]) => clubName);
+
+  // If there are no classes and no failed clubs, show the empty message
+  if ((!classes || classes.length === 0) && failedSelectedClubs.length === 0) {
     return <div className="empty-message">לא נמצאו שיעורים מתאימים</div>;
   }
-
+  
   return (
-    <div className="classes-grouped-list">
-      {regions.map(region => (
-        groupedClasses[region] && Object.keys(groupedClasses[region]).length > 0 && (
-          <div key={region} className="region-group">
-            <h3 className="region-title">{region}</h3>
-            <div className="clubs-container-for-region">
-              {Object.entries(groupedClasses[region]).map(([clubName, clubClasses]) => {
-                // Clean up club name for display
-                const displayClubName = clubName
-                  .replace("הולמס פלייס ", "")
-                  .replace("גו אקטיב ", "")
-                  .replace("פרימיום ", "") // Also remove premium?
-                  .replace("פמילי ", "") // Also remove family?
-                  .trim();
-                
-                return (
-                  <div key={clubName} className="club-group">
-                    <h4 className="club-title">{displayClubName}</h4>
-                    <div className="classes-grid">
-                      {clubClasses.map((cls, index) => {
-                        // --- Past Class Logic --- 
-                        let isPast = false;
-                        let classDateTimeStr = null;
-                        if (cls.day && cls.time) {
-                          // Combine date and time for comparison (assuming local timezone is appropriate)
-                          // Format: YYYY-MM-DDTHH:MM:00 
-                          classDateTimeStr = `${cls.day}T${cls.time}:00`; 
-                          try {
-                            const classDateTime = new Date(classDateTimeStr);
-                            const now = new Date();
-                            // Check if the date object is valid before comparing
-                            if (!isNaN(classDateTime.getTime()) && classDateTime < now) {
-                              isPast = true;
-                            }
-                          } catch (e) {
-                            console.error("Error parsing class date/time:", classDateTimeStr, e);
-                          }
-                        }
-                        // ------------------------
-
-                        // --- Format Date D.M (remains same) --- 
-                        let displayDateDM = '-';
-                        if (cls.day) {
-                          try {
-                            const parts = cls.day.split('-'); // YYYY-MM-DD
-                            if (parts.length === 3) {
-                              const dayOfMonth = parseInt(parts[2], 10);
-                              const month = parseInt(parts[1], 10);
-                              displayDateDM = `${dayOfMonth}.${month}`;
-                            }
-                          } catch (e) { /* Ignore */ }
-                        }
-                        // ---------------------------------------
-
-                        return (
-                          <div 
-                            key={`${cls.day}-${cls.time}-${cls.name}-${index}`} 
-                            className={classNames('class-card', { 'class-card--past': isPast })}
-                          >
-                            {/* --- Line 1: Time DayName D.M (Past) --- */}
-                            <p className="class-card-line1">
-                                <span className="time">{cls.time || '--:--'}</span>
-                                <span className="day-name">{cls.day_name_hebrew || ''}</span>
-                                <span className="date-dm">{displayDateDM}</span>
-                                {isPast && <span className="past-indicator">(חלף)</span>}
-                            </p>
-                            {/* --- Line 2: Name - Instructor --- */}
-                            <p className="class-card-line2">
-                                <span className="name">{cls.name}</span>
-                                {cls.instructor && <span className="instructor"> - {cls.instructor}</span>}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
+    <div className="class-list">
+      <div className="opening-hours-header">
+        <span className="opening-hours-title">שעות פתיחה:</span>
+        {Object.entries(openingHours).map(([days, hours]) => (
+          <span key={days} className="hours-entry">
+            {days} {hours}
+          </span>
+        ))}
+      </div>
+      {Object.entries(groupedClasses).map(([region, days]) => (
+        <div key={region} className="region-section">
+          <h2 className="region-title">{region}</h2>
+          {Object.entries(days).map(([day, dayClasses]) => (
+            <div key={day} className="day-section">
+              <h3 className="day-title">{day}</h3>
+              <div className="classes-container">
+                {dayClasses.map((cls) => (
+                  <div key={`${cls.club}-${cls.time}-${cls.name}`} className="class-card">
+                    <div className="class-time">{cls.time}</div>
+                    <div className="class-name">{cls.name}</div>
+                    <div className="class-instructor">{cls.instructor}</div>
+                    <div className="class-club">{clubShortNames[cls.club] || cls.club}</div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
-          </div>
-        )
+          ))}
+        </div>
       ))}
     </div>
   );
@@ -142,10 +120,11 @@ ClassList.propTypes = {
       time: PropTypes.string,
       name: PropTypes.string,
       instructor: PropTypes.string,
-      duration: PropTypes.string,
       location: PropTypes.string,
-      region: PropTypes.string, // Added region
+      region: PropTypes.string,
       timestamp: PropTypes.string
   })),
-  regions: PropTypes.arrayOf(PropTypes.string) // Added regions prop
+  regions: PropTypes.arrayOf(PropTypes.string),
+  clubStatuses: PropTypes.object,
+  openingHours: PropTypes.object
 }; 

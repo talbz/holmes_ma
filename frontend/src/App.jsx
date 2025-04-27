@@ -1,297 +1,284 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { QueryClient, QueryClientProvider, useQuery } from 'react-query';
-import classNames from 'classnames';
-
-// Components
-import { Toast } from './components/Toast';
-import { CrawlerStatus } from './components/CrawlerStatus';
-import { ClassList } from './components/ClassList';
-import { ClubList } from './components/ClubList';
-import { Filters } from './components/Filters';
-
-// Hooks
+import React, { useState, useCallback, useMemo } from 'react';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import './styles/App.scss';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useLocalStorage } from './hooks/useLocalStorage';
+import { Toast } from './components/Toast';
+import { ClubList } from './components/ClubList';
+import { ClassList } from './components/ClassList';
+import { DataFreshness } from './components/DataFreshness';
+import { Filters } from './components/Filters';
 import { useClasses } from './hooks/useClasses';
 import { useClubs } from './hooks/useClubs';
-import { useCrawler, useStopCrawler } from './hooks/useCrawler';
-import { useRetryCrawl } from './hooks/useRetryCrawl';
-import { useToast } from './hooks/useToast';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ConnectionStatus } from './components/ConnectionStatus';
+import { CrawlerControls } from './components/CrawlerControls';
+import { AppProvider } from './contexts/AppContext';
 
-// Styles
-import './styles/main.scss';
+// Create a new QueryClient instance
+const queryClient = new QueryClient();
 
-// Create a client
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-      staleTime: 300000, // 5 minutes
-    },
-  },
-});
+// Hebrew days of the week for display
+const HEBREW_DAYS = {
+  'Sunday': 'ראשון',
+  'Monday': 'שני',
+  'Tuesday': 'שלישי',
+  'Wednesday': 'רביעי',
+  'Thursday': 'חמישי',
+  'Friday': 'שישי',
+  'Saturday': 'שבת'
+};
 
-// Define HEBREW_DAYS if needed here or import from Filters if possible
-const HEBREW_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
-
-const AppContent = () => {
-  // Local state
-  const [filters, setFilters] = useLocalStorage('holmesFilters', {
-    class_name: [],
-    instructor: [],
-    day_name_hebrew: HEBREW_DAYS,
-    club: [],
+// Main application content component
+function AppContent() {
+  // State hooks
+  const [selectedClub, setSelectedClub] = useLocalStorage('selected-club', []);
+  const [toasts, setToasts] = useState([]);
+  const [dataInfo, setDataInfo] = useState({
+    has_data: false,
+    latest_file: null,
+    latest_crawl_date: null,
+    days_since_crawl: null,
+    is_stale: true,
+    clubs: [] // Initialize clubs array in dataInfo
   });
-
-  console.log("AppContent: filters state:", filters);
+  const [filters, setFilters] = useLocalStorage('class-filters', {});
   
-  const [showHeadless, setShowHeadless] = useState(false); // Default to NOT headless (show window)
-  
-  // Hooks
-  const { toasts, addToast, removeToast } = useToast();
-  
-  // Memoize the onStatusChange callback
-  const handleWsStatusChange = useCallback((status) => {
-    console.log(`WebSocket status changed to: ${status}`);
-    // Only show toast for initial connection
-    if (status === 'connected') {
-      addToast('WebSocket connection established', 'success');
-    }
-  }, [addToast]); // Dependency: addToast
-
-  // WebSocket connection and status handling
+  // Data fetching hooks for classes and clubs
   const { 
-    wsStatus, 
-    crawlStatus, 
-    clubStatuses,
-    sendMessage 
-  } = useWebSocket({
-    url: 'ws://localhost:8080/ws',
-    onStatusChange: handleWsStatusChange, // Use the memoized callback
-  });
-
-  // Data fetching with React Query
-  const { 
-    data: classesData,
+    data: classesData, 
     isLoading: classesLoading, 
-    isError: classesError,
+    error: classesError, 
     refetch: refetchClasses
   } = useClasses(filters);
-  const classes = classesData?.classes || [];
-  const regions = classesData?.regions_found || [];
-
-  // Club data
+  
+  // Use the useClubs hook to get clubs data from the API
   const {
-    data: availableClubs = [],
-    isLoading: clubsLoading
+    data: clubsData,
+    isLoading: clubsLoading,
+    error: clubsError,
+    refetch: refetchClubs
   } = useClubs();
+  
+  // New state for headless mode
+  const [headlessMode, setHeadlessMode] = useState(false);
+  
+  // Define toast handling functions first to avoid reference errors
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }, []);
+  
+  const addToast = useCallback((message, type = 'info') => {
+    const newToast = {
+      id: Date.now(),
+      message,
+      type
+    };
+    setToasts(prev => [...prev, newToast]);
+    
+    // Auto-remove toast after 5 seconds
+    setTimeout(() => {
+      removeToast(newToast.id);
+    }, 5000);
+  }, [removeToast]); // Now depends on removeToast which is defined above
+  
+  // Send message through WebSocket - define early to avoid reference errors
+  const {
+    wsStatus,
+    crawlStatus,
+    clubStatuses,
+    reconnectInfo,
+    reconnect,
+    sendMessage
+  } = useWebSocket({
+    url: 'ws://localhost:8080/ws',
+    autoConnect: true,
+    onStatusChange: useCallback((status, data) => {
+      console.log(`App: WebSocket status change: ${status}`, data);
+      
+      // Handle data_info events 
+      if (status === 'data_info' && data) {
+        console.log('App: Received data_info response', data);
+        
+        // We don't need to process clubs data from WebSocket anymore
+        // as we're using the clubs API directly now
+        // Just update the other dataInfo properties
+        const { clubs, ...otherData } = data;
+        setDataInfo(prev => ({ ...prev, ...otherData }));
+      } 
+      // Handle crawl completion events
+      else if (status === 'crawl_complete') {
+        console.log('App: Received crawl_complete event', data);
+        addToast('איסוף נתונים הסתיים בהצלחה', 'success');
+        
+        // Refresh data info to get updated last crawl date using the new endpoint
+        sendMessage({ action: 'get_crawl_status' });
+        
+        // Refresh clubs data from API after successful crawl
+        refetchClubs();
+      }
+      // Handle crawl error events
+      else if (status === 'crawl_error') {
+        console.log('App: Received crawl_error event', data);
+        addToast(`שגיאה באיסוף נתונים: ${data?.message || 'שגיאה לא ידועה'}`, 'error');
+      }
+    }, [addToast, refetchClubs])
+  });
+  
+  // Handle starting the crawl process - Uses sendMessage
+  const handleStartCrawl = useCallback(() => {
+    if (wsStatus !== 'connected') {
+      addToast('לא מחובר לשרת. אנא המתן לחיבור או נסה להתחבר מחדש.', 'error');
+      return;
+    }
+    console.log("App: Requesting start_crawl with headless mode:", headlessMode);
+    
+    try {
+      // Send the headless mode parameter with the start_crawl action
+      sendMessage({ 
+        action: 'start_crawl',
+        headless: headlessMode 
+      });
+      
+      // Add toast notification that crawl was requested
+      addToast('בקשת איסוף נתונים נשלחה', 'info');
+    } catch (error) {
+      console.error("Error sending start_crawl message:", error);
+      addToast(`שגיאה בשליחת בקשת איסוף: ${error.message}`, 'error');
+    }
+  }, [wsStatus, sendMessage, addToast, headlessMode]);
+  
+  // Handle data refreshing - Uses handleStartCrawl
+  const handleRefreshData = useCallback(() => {
+    if (wsStatus !== 'connected') {
+      addToast('לא מחובר לשרת. אנא המתן לחיבור או נסה להתחבר מחדש.', 'error');
+      return;
+    }
+    console.log("App: Requesting data refresh (via start_crawl)");
+    handleStartCrawl();
+  }, [wsStatus, addToast, handleStartCrawl]);
 
-  // Start crawl mutation
-  const { mutate: startCrawl, isLoading: startCrawlLoading } = useCrawler();
-  // Stop crawl mutation
-  const { mutate: stopCrawl, isLoading: stopCrawlLoading } = useStopCrawler();
-  const { mutate: retryCrawl, isLoading: retryCrawlLoading } = useRetryCrawl();
-
-  // Filter handling
-  const handleFilterChange = useCallback((name, value) => {
-    console.log(`AppContent: handleFilterChange received - Name: ${name}, Value:`, value);
-    setFilters(prev => {
-      const newState = { ...prev, [name]: value };
-      console.log(`AppContent: setFilters updating to:`, newState);
-      // React Query will trigger fetch automatically because the 'filters' object reference changes
-      return newState;
-    });
+  // Handle filter changes
+  const handleFilterChange = useCallback((newFilters) => {
+      console.log("App: Filters changed", newFilters);
+      setFilters(newFilters);
   }, [setFilters]);
 
-  // Crawl handling
-  const handleStartCrawl = useCallback(() => {
-    startCrawl({ headless: showHeadless });
-  }, [startCrawl, showHeadless]);
-
-  // Stop handler
+  // Process clubs data for display - Use the data from the useClubs hook
+  const availableClubs = useMemo(() => {
+    // Use the clubsData from the API hook instead of dataInfo.clubs
+    if (clubsData && Array.isArray(clubsData)) {
+      console.log("App: Using clubs data from API:", clubsData.length, "clubs");
+      return clubsData;
+    }
+    
+    console.warn("App: No clubs data available from API");
+    return [];
+  }, [clubsData]);
+  
+  // Handle stopping the crawl process
   const handleStopCrawl = useCallback(() => {
-    stopCrawl();
-  }, [stopCrawl]);
-
-  // Retry handler
-  const handleRetryFailed = useCallback(() => {
-     retryCrawl({ headless: showHeadless });
-  }, [retryCrawl, showHeadless]);
-
-  // Club selection handling
-  const handleClubSelect = useCallback((clubName) => {
-    handleFilterChange('club', clubName);
-    refetchClasses();
-  }, [handleFilterChange, refetchClasses]);
-
-  // Effect to refresh classes when crawl completes
-  useEffect(() => {
-    if (crawlStatus.message && crawlStatus.message.includes('הסתיים')) {
-      refetchClasses();
+    if (wsStatus !== 'connected') {
+      addToast('לא מחובר לשרת. אנא המתן לחיבור או נסה להתחבר מחדש.', 'error');
+      return;
     }
-  }, [crawlStatus.message, refetchClasses]);
-
-  // App class based on WebSocket status
-  const appClass = useMemo(() => {
-    return classNames('App', {
-      'App-crawling': crawlStatus.inProgress,
-      'App-disconnected': wsStatus !== 'connected'
-    });
-  }, [wsStatus, crawlStatus.inProgress]);
-
-  // Which clubs to display - either from WebSocket or from API
-  const displayClubs = useMemo(() => {
-    if (crawlStatus.clubsList && crawlStatus.clubsList.length > 0) {
-      return crawlStatus.clubsList;
+    console.log("App: Requesting stop_crawl");
+    
+    try {
+      sendMessage({ action: 'stop_crawl' });
+      addToast('בקשת עצירת איסוף נשלחה', 'info');
+    } catch (error) {
+      console.error("Error sending stop_crawl message:", error);
+      addToast(`שגיאה בשליחת בקשת עצירה: ${error.message}`, 'error');
     }
-    return availableClubs;
-  }, [crawlStatus.clubsList, availableClubs]);
-
-  // --- Add log before return --- 
-  console.log("AppContent rendering with:", { 
-      filters, 
-      classesLoading, 
-      classesError, 
-      classesCount: classes.length, 
-      regionCount: regions.length 
-  });
-  // -----------------------------
-
+  }, [wsStatus, sendMessage, addToast]);
+  
+  // Handle headless mode toggle
+  const handleHeadlessToggle = useCallback((e) => {
+    setHeadlessMode(e.target.checked);
+  }, []);
+  
   return (
-    <div className={appClass}>
+    <div className={`App App-${wsStatus}`}>
       <header className="App-header">
-        <h1>מערכת שעות הולמס פלייס</h1>
-        
-        {/* Connection status indicator */}
-        <div className="connection-status">
-          {wsStatus === 'connected' && <span className="status-connected">מחובר</span>}
-          {wsStatus === 'connecting' && <span>מתחבר...</span>}
-          {wsStatus === 'disconnected' && <span className="status-disconnected">מנותק</span>}
-          {wsStatus === 'error' && <span className="status-error">שגיאת חיבור</span>}
-        </div>
-      </header>
-
-      <div className="controls">
-        <div className="crawl-controls">
-          {/* Start Button */}
-          <button 
-            className="crawl-button start-button"
-            onClick={handleStartCrawl}
-            disabled={crawlStatus.inProgress || startCrawlLoading || stopCrawlLoading || retryCrawlLoading || wsStatus !== 'connected'}
-          >
-            {startCrawlLoading ? 'מתחיל...' : (crawlStatus.inProgress ? 'איסוף בתהליך...' : 'התחל איסוף נתונים')}
-          </button>
-
-          {/* Retry Button - Show only when NOT crawling */}
-          {!crawlStatus.inProgress && (
-              <button 
-                className="crawl-button retry-button"
-                onClick={handleRetryFailed}
-                disabled={startCrawlLoading || stopCrawlLoading || retryCrawlLoading || wsStatus !== 'connected'}
-                title="נסה לאסוף נתונים רק מסניפים שנכשלו בפעם הקודמת"
-              >
-                {retryCrawlLoading ? 'מנסה שוב...' : 'נסה שוב כשלונות'}
-              </button>
-          )}
-          
-          {/* Stop Button - Show only when crawl IS in progress */}
-          {crawlStatus.inProgress && (
-            <button 
-              className="crawl-button stop-button"
-              onClick={handleStopCrawl}
-              disabled={stopCrawlLoading}
-            >
-              {stopCrawlLoading ? 'עוצר...' : 'עצור איסוף'}
-            </button>
-          )}
-
-          {/* Headless Toggle - Disable if already crawling */}
-          <div className="headless-toggle">
-            {/* Use label as the switch container */}
-            <label className="toggle-switch">
-              <input 
-                type="checkbox" 
-                checked={!showHeadless} // Input checked means headless=TRUE
-                onChange={(e) => setShowHeadless(!e.target.checked)} // Invert logic: checked = headless
-                disabled={crawlStatus.inProgress || startCrawlLoading || stopCrawlLoading}
-              />
-              <span className="slider round"></span> {/* The visual slider */}
-            </label>
-            <span>Show Browser Window</span> {/* Simple text label beside switch */}
-          </div>
-        </div>
-
-        {/* Show crawler status when crawling is in progress OR if there's a final status message */}
-        {(crawlStatus.inProgress || crawlStatus.message) && (
-          <CrawlerStatus 
-            status={crawlStatus} 
-            isError={crawlStatus.message?.includes('נכשל') || crawlStatus.message?.includes('שגיאה')}
-          />
-        )}
-
-        {/* Show clubs list when clubs are available */}
-        {displayClubs && displayClubs.length > 0 && (
-          (() => { // Immediately invoked function expression for logging
-            console.log("AppContent rendering ClubList with statuses:", clubStatuses);
-            return (
-              <ClubList 
-                clubs={displayClubs} 
-                selectedClub={filters.club}
-                onSelectClub={handleClubSelect}
-                clubStatuses={clubStatuses} 
-              />
-            );
-          })()
-        )}
-
-        {/* Filters */}
-        <Filters 
-          filters={filters}
-          onFilterChange={handleFilterChange}
-          loading={classesLoading}
+        <h1>לוח הזמנים של הולמס פלייס</h1>
+        <ConnectionStatus 
+          status={wsStatus} 
+          reconnectInfo={reconnectInfo}
+          onReconnect={reconnect}
         />
-      </div>
-
-      {/* Classes list */}
-      <div className="classes-container">
-        <h2>שיעורים</h2>
+      </header>
+      
+      <main>
+        {/* Data freshness component */}
+        <DataFreshness 
+          dataInfo={dataInfo}
+          onStartCrawl={handleStartCrawl}
+        />
         
-        {classesLoading ? (
-          <div className="loading-message">טוען שיעורים...</div>
-        ) : classesError ? (
-          <div className="error-message">שגיאה בטעינת השיעורים</div>
-        ) : classes && classes.length > 0 ? (
-          <ClassList classes={classes} regions={regions} />
-        ) : (
-          // Check if filters are applied before showing "no results"
-          Object.values(filters).some(val => Array.isArray(val) ? val.length > 0 : !!val) ? 
-             <div className="empty-message">לא נמצאו שיעורים מתאימים לסינון</div>
-           : <div className="empty-message">התחל סינון או איסוף נתונים...</div>
-        )}
-      </div>
-
-      {/* Toast notifications */}
-      <div className="toast-container">
-        {toasts.map(toast => (
-          <Toast
-            key={toast.id}
-            type={toast.type}
-            message={toast.message}
-            onClose={() => removeToast(toast.id)}
+        {/* Crawler controls component */}
+        <CrawlerControls
+          crawlStatus={crawlStatus}
+          onStartCrawl={handleStartCrawl}
+          onStopCrawl={handleStopCrawl}
+          headlessMode={headlessMode}
+          onHeadlessToggle={handleHeadlessToggle}
+        />
+        
+        {/* Club selection */}
+        <section className="clubs-section">
+          <h2>סניפים</h2>
+          <ClubList 
+            availableClubs={availableClubs} // Pass the processed list from API
+            selectedClub={selectedClub} 
+            onSelectClub={setSelectedClub}
+            clubStatuses={clubStatuses || {}} // Statuses for individual item styling
+            dataInfo={dataInfo} // Pass for freshness indicator
+            onRefreshData={handleRefreshData}
+            isLoading={clubsLoading} // Pass loading state
+            error={clubsError} // Pass error state
           />
-        ))}
-      </div>
+        </section>
+        
+        {/* Filters Component */}
+        <section className="filters-section">
+           <h2>סינון שיעורים</h2>
+           <Filters 
+              filters={filters} 
+              onFilterChange={handleFilterChange} 
+              loading={classesLoading || crawlStatus?.inProgress} // Disable filters while loading/crawling
+           />
+        </section>
+        
+        {/* Class display */}
+        <section className="classes-section">
+          <h2>שיעורים</h2>
+          <ClassList 
+            classes={classesData?.classes || []} // Pass classes from useClasses
+            regions={classesData?.regions_found || []} // Pass regions from useClasses
+            isLoading={classesLoading} // Pass loading state
+            error={classesError} // Pass error state
+            clubStatuses={clubStatuses || {}}
+            openingHours={classesData?.opening_hours || {}}
+          />
+        </section>
+      </main>
+      
+      {/* Toast notifications */}
+      <Toast toasts={toasts} onRemove={removeToast} />
     </div>
   );
-};
+}
 
-const App = () => {
+// Main application wrapper
+export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AppContent />
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AppProvider>
+          <AppContent />
+        </AppProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
-};
-
-export default App; 
+}
