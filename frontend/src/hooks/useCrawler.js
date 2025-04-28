@@ -8,7 +8,7 @@ export const useCrawler = () => {
   const queryClient = useQueryClient();
   
   return useMutation(
-    async ( { headless = true } ) => {
+    async ( { headless = false } ) => {
       const response = await fetch('http://localhost:8080/start-crawl', {
         method: 'POST',
         headers: {

@@ -1,0 +1,118 @@
+@use './_variables' as *;
+
+.controls {
+  margin-bottom: 30px;
+  background-color: $light-bg-color;
+  padding: 20px;
+  border-radius: $border-radius;
+  
+  .crawl-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+  }
+  
+  .crawl-button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: $border-radius;
+    cursor: pointer;
+    font-size: $font-size-base;
+    font-weight: $font-weight-bold;
+    transition: $transition-base;
+
+    &.start-button {
+      background-color: $success-color;
+      color: white;
+      
+      &:hover:not(:disabled) {
+        background-color: darken($success-color, 10%);
+      }
+    }
+    
+    &.stop-button {
+      background-color: $error-color;
+      color: white;
+      
+      &:hover:not(:disabled) {
+        background-color: darken($error-color, 10%);
+      }
+    }
+    
+    &.retry-button {
+       background-color: $warning-color;
+       color: #333;
+       
+       &:hover:not(:disabled) {
+          background-color: darken($warning-color, 10%);
+       }
+    }
+    
+    &:disabled {
+      background-color: $secondary-color;
+      cursor: not-allowed;
+    }
+  }
+  
+  .headless-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+    
+    input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      
+      &:before {
+        position: absolute;
+        content: "";
+        height: 18px;
+        width: 18px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .4s;
+      }
+      
+      &.round {
+        border-radius: 24px;
+        
+        &:before {
+          border-radius: 50%;
+        }
+      }
+    }
+    
+    input:checked + .slider {
+      background-color: $primary-color;
+    }
+    
+    input:focus + .slider {
+      box-shadow: 0 0 1px $primary-color;
+    }
+    
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+  }
+} 

@@ -1,0 +1,108 @@
+@use 'variables' as *;
+
+.crawler-status {
+  background-color: $light-bg-color;
+  border-radius: $border-radius;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: $box-shadow-light;
+  direction: rtl;
+
+  h3 {
+    margin-top: 0;
+    color: $text-color;
+    margin-bottom: 15px;
+    font-weight: $font-weight-bold;
+  }
+
+  .status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .status-message {
+    font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    color: $text-color;
+  }
+
+  .status-detail {
+    font-size: $font-size-small;
+    color: $secondary-text-color;
+  }
+
+  .progress-bar-container {
+    margin-top: 15px;
+    height: 20px;
+    background-color: $border-color;
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .progress-bar {
+    height: 100%;
+    transition: width 0.3s ease-in-out;
+    border-radius: 10px;
+    
+    &.progress-low {
+      background: linear-gradient(to right, $warning-color, lighten($warning-color, 15%));
+    }
+    
+    &.progress-medium {
+      background: linear-gradient(to right, $info-color, lighten($info-color, 15%));
+    }
+    
+    &.progress-high {
+      background: linear-gradient(to right, $success-color, lighten($success-color, 15%));
+    }
+  }
+
+  .progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-weight: $font-weight-bold;
+    text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
+    font-size: $font-size-small;
+  }
+  
+  // Completion message styling
+  &.crawler-status-complete {
+    background-color: rgba($success-color, 0.1);
+    border-left: 5px solid $success-color;
+    animation: fade-out 10s forwards 5s;
+
+    h3 {
+      color: darken($success-color, 15%);
+    }
+
+    .completion-time {
+      font-size: $font-size-small;
+      color: $secondary-text-color;
+      margin-top: 5px;
+    }
+  }
+  
+  // Error status styling
+  &.crawler-status-error {
+    background-color: rgba($danger-color, 0.1);
+    border-left: 5px solid $danger-color;
+
+    h3 {
+      color: darken($danger-color, 15%);
+    }
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.6;
+  }
+} 

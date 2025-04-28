@@ -128,88 +128,71 @@ def get_latest_data():
 def get_latest_successful_crawl_file():
     """Get the latest successful (complete) crawl file"""
     data_dir = get_data_dir()
-    
-    # Look for both old and new format files
-    class_jsonl_files = glob.glob(os.path.join(data_dir, "holmes_place_schedule_*.jsonl"))
-    club_jsonl_files = glob.glob(os.path.join(data_dir, "holmes_clubs_*.jsonl"))
-    
-    all_jsonl_files = class_jsonl_files + club_jsonl_files
-    
-    if not all_jsonl_files:
+
+    # Patterns for JSONL files (old timestamped and new plain)
+    class_pattern = os.path.join(data_dir, "holmes_place_schedule*.jsonl")
+    club_pattern = os.path.join(data_dir, "holmes_clubs*.jsonl")
+    class_files = glob.glob(class_pattern)
+    club_files = glob.glob(club_pattern)
+    all_files = class_files + club_files
+
+    if not all_files:
         logging.info("No JSONL files found in data directory")
         return None
-    
-    # Log all available files
-    sorted_files = sorted(all_jsonl_files, key=os.path.getctime, reverse=True)
-    logging.info(f"Available JSONL files (newest first): {[os.path.basename(f) for f in sorted_files]}")
-    
-    # Check if we have any club format files (new format)
-    sorted_club_files = sorted(club_jsonl_files, key=os.path.getctime, reverse=True)
-    if sorted_club_files:
-        # If we have club format files, prefer the newest one
-        latest_file = sorted_club_files[0]
-        logging.info(f"Using newest club format file: {os.path.basename(latest_file)}")
-        return latest_file
-    
-    # If no club format files, fall back to the old class format
-    # Default to using the most recent file
-    latest_file = sorted_files[0]
-    
-    # Check the status file to potentially override this decision
-    status_filename = os.path.join(data_dir, "last_crawl_status.json")
-    should_use_latest = True  # Default to using latest file
-    
-    try:
-        if os.path.exists(status_filename):
-            with open(status_filename, 'r', encoding='utf-8') as f:
-                status_data = json.load(f)
-                
-                # Check if the status file uses the new format
-                if isinstance(status_data, dict) and "crawl_results" in status_data:
-                    # New format - check if the crawl was explicitly marked as problematic
-                    was_stopped_early = status_data.get("was_stopped_early", False)
-                    critical_error_occurred = status_data.get("critical_error_occurred", False)
-                    crawl_results = status_data.get("crawl_results", {})
-                    
-                    logging.info(f"Status file details: was_stopped_early={was_stopped_early}, critical_error_occurred={critical_error_occurred}, clubs_count={len(crawl_results)}")
-                    
-                    # Only avoid using latest file if it was explicitly stopped early or had critical errors
-                    # AND it has zero successful clubs (completely failed crawl)
-                    if ((was_stopped_early or critical_error_occurred) and
-                            (not crawl_results or not any(club_data.get('status') == 'success' for club_data in crawl_results.values()))):
-                        should_use_latest = False
-                        logging.info("Latest crawl is NOT usable - explicitly marked as problematic with no successful clubs")
-                    else:
-                        logging.info("Latest crawl is considered usable - using it even if partially complete")
-                else:
-                    # Old format - use latest file if ANY clubs were successful
-                    if status_data and any(club_data.get('status') == 'success' for club_data in status_data.values()):
-                        should_use_latest = True
-                        logging.info("Latest crawl is usable (using old status format)")
-                    else:
-                        should_use_latest = False
-                        logging.info("Latest crawl is NOT usable - no successful clubs (using old status format)")
-        else:
-            # If status file doesn't exist, default to using the latest file
-            logging.info("No status file found, defaulting to latest file")
-    except Exception as e:
-        logging.error(f"Error reading last crawl status: {e}")
-        # Continue with latest file anyway when there's an error reading status
-    
-    if should_use_latest:
-        # Use the most recent file
-        logging.info(f"Using most recent file: {os.path.basename(latest_file)}")
-        return latest_file
+
+    # Sort all JSONL files by creation time descending
+    sorted_all = sorted(all_files, key=os.path.getctime, reverse=True)
+    logging.info(f"Available JSONL files (newest first): {[os.path.basename(f) for f in sorted_all]}")
+
+    # Prefer club-format files if present
+    sorted_club = sorted(club_files, key=os.path.getctime, reverse=True)
+    if sorted_club:
+        latest = sorted_club[0]
+        logging.info(f"Using newest club format file: {os.path.basename(latest)}")
+        return latest
+
+    # Otherwise, candidate is the most recent file
+    latest = sorted_all[0]
+
+    # Check status file to determine usability
+    status_file = os.path.join(data_dir, "last_crawl_status.json")
+    should_use_latest = True
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, 'r', encoding='utf-8') as sf:
+                status_data = json.load(sf)
+            # New format status file
+            if isinstance(status_data, dict) and "crawl_results" in status_data:
+                was_stopped = status_data.get("was_stopped_early", False)
+                critical_error = status_data.get("critical_error_occurred", False)
+                results = status_data.get("crawl_results", {})
+                logging.info(f"Status file details: was_stopped_early={was_stopped}, critical_error_occurred={critical_error}, clubs_count={len(results)}")
+                if (was_stopped or critical_error) and not any(d.get('status') == 'success' for d in results.values()):
+                    should_use_latest = False
+                    logging.info("Latest crawl is NOT usable - problematic run with no successful clubs")
+            else:
+                # Old format: direct club statuses
+                if not any(isinstance(v, dict) and v.get('status') == 'success' for v in status_data.values()):
+                    should_use_latest = False
+                    logging.info("Latest crawl is NOT usable - old status format with no successful clubs")
+        except Exception as e:
+            logging.error(f"Error reading last crawl status: {e}")
     else:
-        # If the latest crawl should be avoided, try to find previous successful crawls
-        if len(sorted_files) > 1:
-            # Return the second most recent file
-            logging.info(f"Latest crawl was problematic, using previous file instead: {os.path.basename(sorted_files[1])}")
-            return sorted_files[1]
-        else:
-            # If only one file exists and it's problematic, return it anyway as it's better than nothing
-            logging.info("Only one file exists, using it despite potential issues: {os.path.basename(sorted_files[0])}")
-            return sorted_files[0]
+        logging.info("No status file found, defaulting to latest file")
+
+    if should_use_latest:
+        logging.info(f"Using most recent file: {os.path.basename(latest)}")
+        return latest
+
+    # If not usable and multiple files exist, pick previous
+    if len(sorted_all) > 1:
+        prev = sorted_all[1]
+        logging.info(f"Using previous file due to problematic latest: {os.path.basename(prev)}")
+        return prev
+
+    # Fallback: use latest anyway
+    logging.info(f"Only one file exists; using it despite potential issues: {os.path.basename(latest)}")
+    return latest
 
 def _read_latest_jsonl():
     """Helper function to read all data from the latest successful JSONL file."""
@@ -779,54 +762,36 @@ async def websocket_endpoint(websocket: WebSocket):
         logging.info(f"WebSocket connection cleaned up for {client_host}")
 
 @app.get("/crawl-status")
-async def get_crawl_status(websocket: WebSocket):
-    """Get the current crawl status."""
+def get_crawl_status_http():
+    """HTTP endpoint to get current crawl status (for frontend)"""
+    return _get_crawl_status_impl()
+
+@app.websocket("/ws/crawl-status")
+async def get_crawl_status_ws(websocket: WebSocket):
+    """WebSocket endpoint to get the current crawl status."""
+    # Accept the connection
+    await websocket.accept()
     try:
-        # Initialize club_to_region mapping
-        club_to_region = {}
-        
-        # Read the status file
-        status_file = Path("data/last_crawl_status.json")
-        if not status_file.exists():
-            await websocket.send_json({
-                "type": "crawl_status",
-                "status": "no_data",
-                "message": "No crawl data available"
-            })
-            return
-            
-        with open(status_file, "r") as f:
-            status_data = json.load(f)
-            
-        # Get the latest data file
-        data_files = sorted(Path("data").glob("holmes_place_schedule_*.jsonl"), reverse=True)
-        if not data_files:
-            await websocket.send_json({
-                "type": "crawl_status",
-                "status": "no_data",
-                "message": "No data files found"
-            })
-            return
-            
-        latest_file = data_files[0]
-        
-        # Read and process the data file
-        with open(latest_file, "r") as f:
-            classes = [json.loads(line) for line in f]
-            
-        # Build club_to_region mapping
-        for cls in classes:
-            if cls["club_name"] not in club_to_region:
-                club_to_region[cls["club_name"]] = cls["region"]
-                
-        # Rest of the function...
-    except Exception as e:
-        logging.error(f"Error processing crawl status: {str(e)}")
+        # Send initial status snapshot
+        crawl_data = _get_crawl_status_impl()
         await websocket.send_json({
             "type": "crawl_status",
-            "status": "error",
-            "message": f"Error processing crawl status: {str(e)}"
+            "data": crawl_data,
+            "timestamp": datetime.now().isoformat()
         })
+        # Keep connection open until client disconnects
+        while True:
+            try:
+                # Wait for any message or disconnection
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                logging.info("get_crawl_status_ws: client disconnected")
+                break
+    except Exception as e:
+        logging.error(f"Error in get_crawl_status_ws: {e}")
+    finally:
+        # Close the connection
+        await websocket.close()
 
 @app.get("/data-info")
 def get_data_info():
@@ -927,11 +892,12 @@ def _get_crawl_status_impl():
     # --- Get clubs with region --- 
     clubs_list_with_region = []
     processed_club_names = set()
+    club_to_region = {}  # Initialize here, outside the if block
 
     # STEP 1: First, get all clubs from the latest data file
     if response["has_data"]:
         all_data = _read_latest_jsonl()
-        club_to_region = {}  # Map to track club->region mapping for all clubs
+        # club_to_region = {}  <-- Remove initialization from here
         
         # Extract all unique clubs from the data
         for item in all_data:
@@ -967,6 +933,10 @@ def _get_crawl_status_impl():
             logging.error(f"Error reading clubs from status file: {e}")
     
     # STEP 3: Combine data and status info
+    # -- ADD LOGGING HERE --
+    logging.info(f"[_get_crawl_status_impl] Before combining: Type of club_to_region: {type(club_to_region)}, Value: {club_to_region}")
+    # ---------------------
+
     # First, add all clubs from the data file (regardless of status)
     for club_name, region in club_to_region.items():
         status = "unknown"
@@ -1001,6 +971,9 @@ def _get_crawl_status_impl():
     # Sort the final list by name and add to response
     clubs_list_with_region.sort(key=lambda c: c["name"])
     response["clubs"] = clubs_list_with_region
+    # Fallback: mark has_data True if clubs list is non-empty
+    if response.get("clubs"):
+        response["has_data"] = True
     # ---------------------------
     
     logging.info(f"Returning crawl status with {len(response['clubs'])} clubs.")

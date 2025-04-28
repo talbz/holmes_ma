@@ -1,0 +1,390 @@
+// ClubList.scss - Styles for the ClubList component
+@use './_variables' as *;
+
+.clubs-list {
+  padding: 15px;
+  margin-bottom: 20px;
+  
+  &.compact {
+    .clubs-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+      
+      .club-item {
+        width: calc(25% - 8px);
+        padding: 8px;
+        margin-bottom: 0;
+        
+        @media (max-width: 1200px) {
+          width: calc(33.33% - 8px);
+        }
+        
+        @media (max-width: 768px) {
+          width: calc(50% - 8px);
+        }
+        
+        @media (max-width: 480px) {
+          width: 100%;
+        }
+      }
+    }
+  }
+}
+
+.clubs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.clubs-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  
+  h3 {
+    margin: 0;
+    font-size: $font-size-large;
+    font-weight: 600;
+    color: $text-color;
+  }
+  
+  .clubs-selected-count {
+    font-size: $font-size-small;
+    color: $secondary-text-color;
+  }
+}
+
+.clubs-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.club-action-button {
+  border: none;
+  border-radius: $border-radius;
+  padding: 6px 12px;
+  font-size: $font-size-small;
+  font-weight: 500;
+  cursor: pointer;
+  transition: $transition-base;
+  
+  &.select-all {
+    background-color: $primary-color;
+    color: white;
+    
+    &:hover {
+      background-color: darken($primary-color, 10%);
+    }
+    
+    &:disabled {
+      background-color: lighten($primary-color, 30%);
+      cursor: not-allowed;
+    }
+  }
+  
+  &.clear-all {
+    background-color: $danger-color;
+    color: white;
+    
+    &:hover {
+      background-color: darken($danger-color, 10%);
+    }
+    
+    &:disabled {
+      background-color: lighten($danger-color, 30%);
+      cursor: not-allowed;
+    }
+  }
+}
+
+.club-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 12px;
+  border-radius: $border-radius;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+
+  &:hover {
+    background-color: $hover-color;
+    border-color: $border-color;
+  }
+
+  &.selected {
+    background-color: $primary-light-color;
+    border-color: $primary-color;
+  }
+
+  &.failed {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .club-checkbox {
+    margin-left: 8px;
+    flex-shrink: 0;
+
+    .selected-icon {
+      color: $primary-color;
+      font-size: 18px;
+    }
+
+    .unselected-icon {
+      color: $text-color;
+      opacity: 0.6;
+      font-size: 18px;
+    }
+
+    .failed-icon {
+      color: $danger-color;
+      font-size: 18px;
+    }
+  }
+
+  .club-info {
+    flex-grow: 1;
+    min-width: 0;
+
+    .club-name {
+      font-weight: $font-weight-medium;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .club-opening-hours {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      font-size: $font-size-small;
+      color: $text-color;
+      opacity: 0.8;
+
+      .hours-entry {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 4px;
+        background-color: $background-color;
+        border-radius: $border-radius-sm;
+        border: 1px solid $border-color;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+        
+        svg {
+          flex-shrink: 0;
+          font-size: 12px;
+          color: $secondary-color;
+        }
+      }
+    }
+  }
+}
+
+.failed-clubs-message {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: rgba($error-color, 0.05);
+  border: 1px solid $error-color;
+  border-radius: $border-radius;
+  color: $error-color;
+}
+
+.failed-clubs-list {
+  margin-top: 10px;
+}
+
+.failed-club-item {
+  margin-bottom: 5px;
+  .club-name {
+    font-weight: $font-weight-bold;
+  }
+}
+
+.area-clubs-section {
+  margin-bottom: 30px;
+  
+  .area-title {
+    font-size: 1.3rem;
+    margin-bottom: 15px;
+    color: $text-color;
+    font-weight: $font-weight-medium;
+    border-bottom: 1px solid $border-color;
+    padding-bottom: 8px;
+  }
+}
+
+.data-freshness {
+  display: inline-flex;
+  align-items: center;
+  font-size: $font-size-sm;
+  color: $secondary-text-color;
+  margin-left: 15px;
+  
+  .time-indicator {
+    display: inline-block;
+    margin-left: 5px;
+    
+    &.stale-data {
+      color: $warning-color;
+      font-weight: $font-weight-medium;
+    }
+  }
+}
+
+.no-clubs-message {
+  text-align: center;
+  padding: 40px 20px;
+  color: $secondary-text-color;
+  background-color: $light-bg-color;
+  border-radius: $border-radius;
+  border: 1px dashed $border-color;
+  
+  p {
+    margin-bottom: 15px;
+  }
+  
+  .refresh-button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: $border-radius;
+    background-color: $primary-color;
+    color: white;
+    cursor: pointer;
+    
+    &:hover:not(:disabled) {
+      background-color: darken($primary-color, 5%);
+    }
+    
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+  
+  .debug-info {
+    margin-top: 20px;
+    padding: 10px;
+    background-color: rgba(0,0,0,0.03);
+    border-radius: $border-radius-sm;
+    font-size: $font-size-small;
+    color: $secondary-text-color;
+    text-align: left;
+  }
+}
+
+.area-section {
+  margin-bottom: 16px;
+
+  .area-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+
+    .area-title {
+      font-size: $font-size-large;
+      font-weight: $font-weight-medium;
+      margin: 0;
+    }
+
+    .area-actions {
+      display: flex;
+      gap: 8px;
+
+      button {
+        padding: 4px 8px;
+        border-radius: $border-radius;
+        border: 1px solid $border-color;
+        background-color: $background-color;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-size: $font-size-small;
+
+        &:hover:not(:disabled) {
+          background-color: $hover-color;
+        }
+
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
+    }
+  }
+}
+
+.data-freshness-indicator {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: $border-radius;
+  background-color: $light-bg-color;
+  
+  &.data-stale {
+    background-color: rgba($warning-color, 0.1);
+    border-left: 3px solid $warning-color;
+  }
+  
+  &.data-partial {
+    background-color: rgba($info-color, 0.1);
+    border-left: 3px solid $info-color;
+  }
+  
+  .freshness-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    
+    .freshness-icon {
+      font-size: 18px;
+      margin-top: 2px;
+    }
+    
+    .freshness-text {
+      flex-grow: 1;
+      
+      p {
+        margin: 0 0 8px;
+        line-height: 1.4;
+      }
+      
+      .refresh-button {
+        padding: 4px 8px;
+        border: none;
+        border-radius: $border-radius-sm;
+        background-color: $primary-color;
+        color: white;
+        cursor: pointer;
+        font-size: $font-size-small;
+        
+        &:hover:not(:disabled) {
+          background-color: darken($primary-color, 5%);
+        }
+        
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
+    }
+  }
+}
+
+.clubs-list-loading {
+  padding: 20px;
+  text-align: center;
+  color: $secondary-text-color;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+} 

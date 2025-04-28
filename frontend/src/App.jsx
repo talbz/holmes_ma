@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import './styles/App.scss';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -10,10 +10,12 @@ import { DataFreshness } from './components/DataFreshness';
 import { Filters } from './components/Filters';
 import { useClasses } from './hooks/useClasses';
 import { useClubs } from './hooks/useClubs';
+import { useCrawlStatus } from './hooks/useDataInfo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { CrawlerControls } from './components/CrawlerControls';
 import { AppProvider } from './contexts/AppContext';
+import axios from 'axios';
 
 // Create a new QueryClient instance
 const queryClient = new QueryClient();
@@ -34,6 +36,11 @@ function AppContent() {
   // State hooks
   const [selectedClub, setSelectedClub] = useLocalStorage('selected-club', []);
   const [toasts, setToasts] = useState([]);
+  
+  // Use the crawl status hook
+  const { data: crawlStatusData, isLoading: crawlStatusLoading, error: crawlStatusError } = useCrawlStatus();
+  
+  // Initialize dataInfo with crawlStatusData when available
   const [dataInfo, setDataInfo] = useState({
     has_data: false,
     latest_file: null,
@@ -42,6 +49,15 @@ function AppContent() {
     is_stale: true,
     clubs: [] // Initialize clubs array in dataInfo
   });
+
+  // Update dataInfo when crawlStatusData changes
+  useEffect(() => {
+    if (crawlStatusData) {
+      console.log("App: Received crawl status data from API:", crawlStatusData);
+      setDataInfo(crawlStatusData);
+    }
+  }, [crawlStatusData]);
+  
   const [filters, setFilters] = useLocalStorage('class-filters', {});
   
   // Data fetching hooks for classes and clubs
@@ -96,15 +112,15 @@ function AppContent() {
     onStatusChange: useCallback((status, data) => {
       console.log(`App: WebSocket status change: ${status}`, data);
       
-      // Handle data_info events 
-      if (status === 'data_info' && data) {
-        console.log('App: Received data_info response', data);
+      // Handle data_info and crawl_status events 
+      if ((status === 'data_info' || status === 'crawl_status') && data) {
+        console.log('App: Received data status from WebSocket:', data);
         
-        // We don't need to process clubs data from WebSocket anymore
-        // as we're using the clubs API directly now
-        // Just update the other dataInfo properties
-        const { clubs, ...otherData } = data;
-        setDataInfo(prev => ({ ...prev, ...otherData }));
+        // Update the dataInfo state with the received data
+        setDataInfo(prevData => ({
+          ...prevData,
+          ...data
+        }));
       } 
       // Handle crawl completion events
       else if (status === 'crawl_complete') {
@@ -125,38 +141,28 @@ function AppContent() {
     }, [addToast, refetchClubs])
   });
   
-  // Handle starting the crawl process - Uses sendMessage
-  const handleStartCrawl = useCallback(() => {
-    if (wsStatus !== 'connected') {
-      addToast('לא מחובר לשרת. אנא המתן לחיבור או נסה להתחבר מחדש.', 'error');
-      return;
-    }
-    console.log("App: Requesting start_crawl with headless mode:", headlessMode);
-    
+  // Handle starting the crawl process - Use HTTP POST to trigger crawl
+  const handleStartCrawl = useCallback(async () => {
     try {
-      // Send the headless mode parameter with the start_crawl action
-      sendMessage({ 
-        action: 'start_crawl',
-        headless: headlessMode 
-      });
-      
-      // Add toast notification that crawl was requested
       addToast('בקשת איסוף נתונים נשלחה', 'info');
+      // Trigger the crawl via HTTP endpoint
+      const response = await axios.post('http://localhost:8080/start-crawl', { headless: headlessMode });
+      console.log('Start crawl response:', response.data);
+      if (response.data && response.data.status) {
+        addToast(response.data.status, 'info');
+      }
+      // Optionally, request updated status after starting
+      sendMessage({ action: 'get_crawl_status' });
     } catch (error) {
-      console.error("Error sending start_crawl message:", error);
-      addToast(`שגיאה בשליחת בקשת איסוף: ${error.message}`, 'error');
+      console.error('Error triggering start_crawl via HTTP:', error);
+      addToast(`שגיאה בהתחלת איסוף נתונים: ${error.message}`, 'error');
     }
-  }, [wsStatus, sendMessage, addToast, headlessMode]);
+  }, [headlessMode, addToast, sendMessage]);
   
   // Handle data refreshing - Uses handleStartCrawl
   const handleRefreshData = useCallback(() => {
-    if (wsStatus !== 'connected') {
-      addToast('לא מחובר לשרת. אנא המתן לחיבור או נסה להתחבר מחדש.', 'error');
-      return;
-    }
-    console.log("App: Requesting data refresh (via start_crawl)");
     handleStartCrawl();
-  }, [wsStatus, addToast, handleStartCrawl]);
+  }, [handleStartCrawl]);
 
   // Handle filter changes
   const handleFilterChange = useCallback((newFilters) => {

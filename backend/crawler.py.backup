@@ -2,11 +2,10 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from typing import Optional, List, Dict, Any # For type hinting
 import re
-import pytz
 
 # Assuming ConnectionManager is defined in app.py or a shared module
 # If not, you might need to adjust the import or pass it differently.
@@ -17,47 +16,28 @@ RETRY_DELAY = 1 # Seconds between retries
 DEFAULT_TIMEOUT = 4000 # 4 seconds in milliseconds for Playwright actions
 NAVIGATION_TIMEOUT = 10000 
 
-# Control characters for BiDi: RTL override / Pop directional formatting
-BIDI_RTL = "\u202B"
-BIDI_POP = "\u202C"
-
 # Configure logging (ensure it's configured globally or passed appropriately)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class HolmesPlaceCrawler:
     """Handles crawling Holmes Place website for class schedules."""
     # Add type hint for websocket_manager if possible (e.g., from app import ConnectionManager)
-    def __init__(self, base_url="https://www.holmesplace.co.il/", 
-                 output_dir="data", headless=False, clubs_filter=None,
-                 websocket_manager=None, stop_event=None, clubs_to_process=None):
-        """Initializes the HolmesPlaceCrawler with configuration settings."""
+    def __init__(self, base_url="https://www.holmesplace.co.il/", websocket_manager: Optional[Any] = None, headless: bool = True, stop_event: Optional[asyncio.Event] = None, clubs_to_process: Optional[List[Dict[str, str]]] = None):
         self.base_url = base_url
-        self.output_dir = output_dir
-        self.headless = headless
-        self.clubs_filter = clubs_filter
+        self.websocket_manager = websocket_manager
+        self.headless = headless # Store the headless preference
+        self.stop_event = stop_event # Store the event
+        self.data_dir = os.path.join(os.path.dirname(__file__), 'data')
+        self.screenshot_dir = os.path.join(os.path.dirname(__file__), 'screenshots')
+        os.makedirs(self.data_dir, exist_ok=True)
+        os.makedirs(self.screenshot_dir, exist_ok=True)
+        self.filename = os.path.join(self.data_dir, f"holmes_place_schedule_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
+        self.playwright = None
         self.browser = None
         self.page = None
-        self.found_classes = []
-        self.processed_clubs = {}
-        self.club_to_region = {}
-        self.club_to_opening_hours = {}  # Store opening hours for each club
-        self.club_to_classes = {}  # Store classes by club
-        self.club_to_address = {}  # Store club addresses
-        self.club_start_times = {}  # Track when crawl for each club started
-        self.club_end_times = {}    # Track when crawl for each club ended
-        self.stop_event = stop_event if stop_event else asyncio.Event()
-        self.total_clubs = 0
-        self.current_club_index = 0
-        self.websocket_manager = websocket_manager
-        self.clubs_to_process = clubs_to_process
-        # Ensure output directory exists
-        os.makedirs(output_dir, exist_ok=True)
-        # Store screenshot directory
-        self.screenshot_dir = os.path.join(os.path.dirname(output_dir), "screenshots")
-        os.makedirs(self.screenshot_dir, exist_ok=True)
-        # Use a single output JSONL file for all crawls
-        self.filename = os.path.join(self.output_dir, "holmes.jsonl")
-        self.collected_class_data = [] # Store all class data in memory
+        self.clubs_to_process = clubs_to_process # Store clubs if provided for retry
+        self.crawl_results = {} # Store status for each club processed {club_name: {url: ..., status: 'success'/'failed'}}
+        self.status_filename = os.path.join(self.data_dir, "last_crawl_status.json")
 
     async def _send_status(self, type: str, message: str, data: Optional[Dict[str, Any]] = None):
         """Helper to send status updates via WebSocket."""
@@ -77,35 +57,21 @@ class HolmesPlaceCrawler:
                     logging.warning("Websocket manager does not have a broadcast method.")
             except Exception as ws_err:
                 logging.error(f"Failed to send WebSocket status: {ws_err}")
-                # Handle disconnection case specifically
-                if "disconnected" in str(ws_err).lower() or "connection" in str(ws_err).lower():
-                    logging.warning("WebSocket appears to be disconnected. Will continue crawling but some status updates may be missed.")
-                    # Store message in a buffer if possible
-                    if not hasattr(self, '_status_buffer'):
-                        self._status_buffer = []
-                    # Buffer up to 100 messages to avoid memory issues
-                    if len(self._status_buffer) < 100:
-                        self._status_buffer.append(status_data)
-                    # Don't try to reconnect here - just note the disconnect and continue crawling
         logging.info(f"Status Update ({type}): {message} {data or ''}")
 
     async def _take_screenshot(self, stage_name: str):
-        """Takes a screenshot for debugging and returns the path."""
+        """Takes a screenshot for debugging."""
         if self.page:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"error_{stage_name}_{timestamp}.png"
-                path = os.path.join(self.screenshot_dir, filename)
+                path = os.path.join(self.screenshot_dir, f"error_{stage_name}_{timestamp}.png")
                 await self.page.screenshot(path=path)
                 logging.info(f"Screenshot saved to {path}")
                 await self._send_status('error_screenshot', f"שגיאה בשלב {stage_name}. צילום מסך נשמר.")
-                return filename  # Return just the filename, not the full path
             except Exception as ss_error:
                 logging.error(f"Failed to take screenshot: {ss_error}")
-                return None
         else:
             logging.warning("Cannot take screenshot, page object is not available.")
-            return None
 
     async def _check_stop_event(self, context_msg=""):
         """Checks if the stop event is set and raises an exception if it is."""
@@ -117,46 +83,23 @@ class HolmesPlaceCrawler:
         """Attempts an async operation with retries, checking stop event."""
         last_exception = None
         for attempt in range(MAX_RETRIES + 1):
-            await self._check_stop_event(f"retry attempt {attempt+1} for {description}")
+            await self._check_stop_event(f"retry attempt {attempt+1} for {description}") # Check before each attempt
             try:
                 result = await operation()
                 if attempt > 0:
                      logging.info(f"Operation '{description}' succeeded on attempt {attempt + 1}.")
                 return result
             except (PlaywrightTimeoutError, PlaywrightError, asyncio.TimeoutError, asyncio.CancelledError, Exception) as e:
-                if isinstance(e, asyncio.CancelledError): raise e
+                if isinstance(e, asyncio.CancelledError): raise e # Re-raise cancellation immediately
                 last_exception = e
-                logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} failed for: {BIDI_RTL}{description}{BIDI_POP}. Error: {type(e).__name__} - {str(e)}")
+                logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} failed for: {description}. Error: {type(e).__name__} - {str(e)}")
                 if attempt < MAX_RETRIES:
                     await self._check_stop_event(f"delay before retry {attempt+2} for {description}") 
                     await asyncio.sleep(RETRY_DELAY)
                 else:
-                    logging.error(f"{BIDI_RTL}Operation failed after {MAX_RETRIES + 1} attempts: {description}{BIDI_POP}. Final Error: {type(e).__name__} - {str(e)}")
+                    logging.error(f"Operation failed after {MAX_RETRIES + 1} attempts: {description}. Final Error: {type(e).__name__} - {str(e)}")
                     await self._send_status('error', f"הפעולה '{description}' נכשלה סופית לאחר {MAX_RETRIES + 1} ניסיונות.")
-                    
-                    # Take a screenshot and store the path
-                    screenshot_path = await self._take_screenshot(f"failed_{description.replace(' ', '_')}")
-                    
-                    # Check if we're processing a club and store the error details
-                    club_name = None
-                    
-                    # Try to extract club name from the description
-                    if "for " in description and " for " not in description:
-                        parts = description.split("for ")
-                        if len(parts) > 1:
-                            club_name = parts[1].strip()
-                    elif " for " in description:
-                        parts = description.split(" for ")
-                        if len(parts) > 1:
-                            club_name = parts[1].strip()
-                            
-                    # If we identified a club, store the error details in crawl_results
-                    if club_name and club_name in self.crawl_results:
-                        error_message = f"Operation '{description}' failed: {type(e).__name__} - {str(e)}"
-                        self.crawl_results[club_name]['error_reason'] = error_message
-                        if screenshot_path:
-                            self.crawl_results[club_name]['screenshot'] = screenshot_path
-                            
+                    await self._take_screenshot(f"failed_{description.replace(' ', '_')}")
                     raise last_exception # Re-raise the last captured exception
         raise RuntimeError(f"Operation '{description}' failed unexpectedly without raising an exception after retries.")
 
@@ -190,29 +133,12 @@ class HolmesPlaceCrawler:
         
     async def start(self):
         """Main method to start the crawling process using footer links."""
-        # Initialize status buffer for storing messages during disconnection
-        self._status_buffer = []
-        
         await self._send_status('crawl_started', 'תהליך איסוף הנתונים מתחיל...')
         critical_error_occurred = False
         self.browser = None
         self.crawl_results = {} # Reset results for this run
-        self.collected_class_data = [] # Reset collected data
         club_info_list_to_iterate = [] # Define variable to hold the list of clubs to process
         
-        # Add connection check before starting
-        try:
-            # Test WebSocket connection if we have a manager
-            if self.websocket_manager:
-                # Simple ping message to check connection
-                ping_data = {"type": "ping", "message": "Checking connection", "timestamp": datetime.now().isoformat()}
-                if hasattr(self.websocket_manager, 'broadcast'):
-                    await self.websocket_manager.broadcast(json.dumps(ping_data))
-                    logging.info("WebSocket connection checked successfully")
-        except Exception as conn_check_err:
-            logging.warning(f"WebSocket connection check failed: {conn_check_err}. Will continue crawling without real-time updates.")
-            # We continue anyway since the crawler should work even without WebSocket
-
         try:
             await self._check_stop_event("crawl start")
             async with async_playwright() as p:
@@ -321,40 +247,15 @@ class HolmesPlaceCrawler:
                                 club_succeeded = True
                                 
                         except Exception as page_nav_err:
-                            error_message = f"Failed to navigate/process club page {club_name} at {club_url}: {type(page_nav_err).__name__} - {page_nav_err}"
-                            logging.error(error_message)
-                            
-                            # Take a screenshot of the error
-                            screenshot_path = await self._take_screenshot(f"navigation_error_{club_name}")
-                            
-                            await self._send_status('error', f"שגיאה בניווט או עיבוד דף סניף {club_name}")
-                            # No need to send club_failed here, handled by finally
-                            continue # Continue to next club, but mark this one failed below
+                             error_message = f"Failed to navigate/process club page {club_name} at {club_url}: {type(page_nav_err).__name__} - {page_nav_err}"
+                             logging.error(error_message)
+                             await self._send_status('error', f"שגיאה בניווט או עיבוד דף סניף {club_name}")
+                             # No need to send club_failed here, handled by finally
+                             continue # Continue to next club, but mark this one failed below
                         finally:
                             # Update crawl results status for the current club
                             status = 'success' if club_succeeded else 'failed'
-                            if club_name in self.crawl_results:
-                                # Update existing entry
-                                self.crawl_results[club_name]['status'] = status
-                                if not club_succeeded and 'error_reason' not in self.crawl_results[club_name]:
-                                    # Add generic error reason if none exists yet
-                                    self.crawl_results[club_name]['error_reason'] = "Failed to process club page"
-                                    if 'page_nav_err' in locals():
-                                        self.crawl_results[club_name]['error_reason'] = str(page_nav_err)
-                                    if 'screenshot_path' in locals() and screenshot_path:
-                                        self.crawl_results[club_name]['screenshot'] = screenshot_path
-                            else:
-                                # Create new entry
-                                result_entry = {"url": club_url, "status": status}
-                                if not club_succeeded:
-                                    # Add error information for failed clubs
-                                    result_entry['error_reason'] = "Failed to process club page"
-                                    if 'page_nav_err' in locals():
-                                        result_entry['error_reason'] = str(page_nav_err)
-                                    if 'screenshot_path' in locals() and screenshot_path:
-                                        result_entry['screenshot'] = screenshot_path
-                                self.crawl_results[club_name] = result_entry
-                                
+                            self.crawl_results[club_name] = {"url": club_url, "status": status}
                             # Send WebSocket status for the specific club only AFTER attempting it
                             if status == 'success':
                                  await self._send_status('club_success', f"עיבוד סניף {club_name} הסתיים (נמצאו שיעורים)", {"club_name": club_name})
@@ -374,7 +275,6 @@ class HolmesPlaceCrawler:
              await self._send_status('error', f"שגיאה קריטית בתהליך האיסוף: {str(e)}")
              
         finally:
-            # Browser cleanup
             if self.browser:
                 try:
                     await self.browser.close()
@@ -384,55 +284,26 @@ class HolmesPlaceCrawler:
             
             # --- Save Final Status --- 
             try:
-                # Add a field to indicate if the crawl was stopped early
-                crawl_data = {
-                    "crawl_results": self.crawl_results,
-                    "was_stopped_early": self.stop_event and self.stop_event.is_set(),
-                    "timestamp": datetime.now().isoformat(),
-                    "critical_error_occurred": critical_error_occurred
-                }
-                with open(os.path.join(self.output_dir, "last_crawl_status.json"), 'w', encoding='utf-8') as f:
-                    json.dump(crawl_data, f, ensure_ascii=False, indent=2)
-                logging.info(f"Saved final crawl status to {os.path.join(self.output_dir, 'last_crawl_status.json')}")
+                with open(self.status_filename, 'w', encoding='utf-8') as f:
+                    json.dump(self.crawl_results, f, ensure_ascii=False, indent=2)
+                logging.info(f"Saved final crawl status to {self.status_filename}")
             except Exception as save_err:
                 logging.error(f"Failed to save final crawl status: {save_err}")
-            # -------------------------
-
-            # --- Save JSONL Data File --- 
-            # Only save the data file if the crawl was complete (not stopped early, no critical errors)
-            # and if we have collected data from at least one successful club
-            was_stopped_early = self.stop_event and self.stop_event.is_set()
-            has_successful_clubs = any(result['status'] == 'success' for result in self.crawl_results.values())
-            
-            if not was_stopped_early and not critical_error_occurred and has_successful_clubs and self.crawl_results:
-                try:
-                    # Write consolidated club results to single holmes.jsonl file
-                    consolidated_results = self.get_results()
-                    timestamp = datetime.now().isoformat()
-                    with open(self.filename, 'a', encoding='utf-8') as f:
-                        for club_name, club_data in consolidated_results.items():
-                            club_data["crawl_timestamp"] = timestamp
-                            f.write(json.dumps(club_data, ensure_ascii=False) + '\n')
-                    logging.info(f"Appended {len(consolidated_results)} entries to {self.filename}")
-                except Exception as save_data_err:
-                    logging.error(f"Failed to save data to file {self.filename}: {save_data_err}")
-            else:
-                logging.warning(f"Not saving data file due to incomplete crawl: stopped_early={was_stopped_early}, critical_error={critical_error_occurred}, successful_clubs={has_successful_clubs}")
             # -------------------------
 
             # Determine overall success/failure for final message
             if self.stop_event and self.stop_event.is_set():
                  if not critical_error_occurred:
-                    await self._send_status('crawl_failed', 'תהליך איסוף הנתונים הופסק.', {"was_complete": False})
+                      await self._send_status('crawl_failed', 'תהליך איסוף הנתונים הופסק.')
             elif not critical_error_occurred:
                 # Check if any clubs actually failed within the run if it wasn't stopped/critical
                 if any(result['status'] == 'failed' for result in self.crawl_results.values()):
-                    await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים (עם שגיאות בחלק מהסניפים).', {"progress": 100, "was_complete": True})
+                     await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים (עם שגיאות בחלק מהסניפים).', {"progress": 100})
                 else:
-                    await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים בהצלחה.', {"progress": 100, "was_complete": True})
+                     await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים בהצלחה.', {"progress": 100})
             else:
                  # If critical error happened earlier, send failed status
-                await self._send_status('crawl_failed', 'תהליך איסוף הנתונים נכשל.', {"was_complete": False})
+                 await self._send_status('crawl_failed', 'תהליך איסוף הנתונים נכשל.')
 
     async def _process_club_schedule(self, club_name: str) -> int:
         """Processes schedules for a single club page."""
@@ -447,8 +318,6 @@ class HolmesPlaceCrawler:
         class_item_selector = "div.time.box-day" 
         
         any_classes_processed = False # Track if at least one class was saved for the club
-        error_details = None # Track error details for failed clubs
-        
         try:
             # --- Try to click the Full Schedule Link --- 
             logging.info(f"Looking for full schedule link: {schedule_link_selector}")
@@ -460,10 +329,7 @@ class HolmesPlaceCrawler:
                 logging.info(f"Clicked full schedule link for {club_name}.")
             except Exception as primary_link_err:
                 # Try the fallback link if the primary one fails
-                error_message = f"Failed to find primary schedule link: {str(primary_link_err)}"
                 logging.warning(f"Failed to find primary schedule link for {club_name}: {primary_link_err}")
-                error_details = error_message
-                
                 logging.info(f"Trying fallback schedule link: {fallback_link_selector}")
                 
                 try:
@@ -473,10 +339,10 @@ class HolmesPlaceCrawler:
                     )
                     logging.info(f"Clicked fallback schedule link for {club_name}.")
                 except Exception as fallback_link_err:
-                    error_message = f"Failed to find both primary and fallback schedule links: {str(fallback_link_err)}"
-                    logging.error(error_message)
-                    error_details = error_message
-                    raise Exception(error_message)
+                    logging.error(f"Failed to find fallback schedule link for {club_name}: {fallback_link_err}")
+                    await self._send_status('error', f"לא נמצא קישור למערכת השיעורים בסניף {club_name}")
+                    await self._take_screenshot(f"no_schedule_link_{club_name}")
+                    raise fallback_link_err  # Re-raise to trigger finally block correctly
             
             logging.info(f"Waiting for schedule content...")
             
@@ -499,19 +365,9 @@ class HolmesPlaceCrawler:
                 )
                 logging.info(f"First class item found within schedule container.")
             except Exception as wait_err:
-                error_message = f"Failed to load schedule content: {str(wait_err)}"
                 logging.error(f"Failed to find schedule content ({schedule_content_selector} or {class_item_selector}) after clicking link for {club_name}: {wait_err}")
-                error_details = error_message
-                
-                # Take a screenshot of the failure
-                screenshot_path = await self._take_screenshot(f"schedule_content_load_fail_{club_name}")
-                
-                # Store error details and screenshot in crawl results
-                if club_name in self.crawl_results:
-                    self.crawl_results[club_name]['error_reason'] = error_message
-                    self.crawl_results[club_name]['screenshot'] = screenshot_path
-                
                 await self._send_status('error', f"תוכן מערכת השעות לא נטען לאחר לחיצה על הקישור בסניף {club_name}")
+                await self._take_screenshot(f"schedule_content_load_fail_{club_name}")
                 # Consider this a failure for the club if content doesn't load
                 raise wait_err # Re-raise to trigger finally block correctly
 
@@ -522,49 +378,28 @@ class HolmesPlaceCrawler:
             
             if classes_found_count > 0:
                 any_classes_processed = True
-            else:
-                error_details = "No classes found in schedule content"
 
         except Exception as e:
             # Catch errors during the club schedule processing
-            error_message = f"Critical error processing schedule: {type(e).__name__} - {str(e)}"
             logging.error(f"Critical error processing schedule for club {club_name}: {type(e).__name__} - {e}", exc_info=False) 
-            
-            # If we don't already have more specific error details
-            if not error_details:
-                error_details = error_message
-                
-                # Take a screenshot of the generic error
-                screenshot_path = await self._take_screenshot(f"schedule_processing_error_{club_name}")
-                
-                # Store error details and screenshot in crawl results  
-                if club_name in self.crawl_results:
-                    self.crawl_results[club_name]['error_reason'] = error_message
-                    self.crawl_results[club_name]['screenshot'] = screenshot_path
-            
             await self._send_status('error', f"שגיאה קריטית בעיבוד מערכת סניף {club_name}: {str(e)}")
             # Failure is determined by any_classes_processed in finally block
         finally:
-            # Store error details for the club
-            if not any_classes_processed and error_details:
-                if club_name in self.crawl_results:
-                    self.crawl_results[club_name]['error_reason'] = error_details
-                else:
-                    self.crawl_results[club_name] = {
-                        "status": "failed",
-                        "error_reason": error_details
-                    }
-            
             # Send final status for THIS club based on whether ANY classes were processed
             if any_classes_processed:
                 await self._send_status('club_success', f"עיבוד סניף {club_name} הסתיים (נמצאו שיעורים)", {"club_name": club_name})
                 logging.info(f"Club {club_name} marked as SUCCESS as some classes were processed.")
             else:
                 # Only mark as failed if NO classes were processed 
-                await self._send_status('club_failed', f"עיבוד סניף {club_name} נכשל (לא נמצאו שיעורים)", {"club_name": club_name})
+                # Error status might have already been sent if content failed to load
+                # Ensure we send failed status specifically if no classes were found
+                if 'wait_err' not in locals(): # Check if the error was *not* the wait error
+                    await self._send_status('club_failed', f"עיבוד סניף {club_name} נכשל (לא נמצאו שיעורים)", {"club_name": club_name})
                 logging.warning(f"Club {club_name} marked as FAILED as no classes were processed.")
-            return 0 if not any_classes_processed else classes_found_count
+                
+            return classes_found_count
 
+    # Renamed from _process_day_classes as it handles the whole container now
     async def _process_schedule_content(self, club_name: str, container_selector: str) -> int:
         """Extracts classes from the entire schedule content area. Handles multiple days within."""
         total_classes_found = 0
@@ -598,55 +433,41 @@ class HolmesPlaceCrawler:
                             day_text_content = day_text_content.strip()
                             # Try to extract date first using regex
                             date_match = re.search(r'(\d{2}/\d{2}/\d{4})', day_text_content)
-                            
                             if date_match:
-                                date_str = date_match.group(1)
-                                # Convert DD/MM/YYYY to ISO format YYYY-MM-DD
+                                date_str_ddmmyyyy = date_match.group(1)
                                 try:
-                                    day, month, year = date_str.split('/')
-                                    iso_date_str = f"{year}-{month}-{day}"
-                                except Exception as date_parse_err:
-                                    logging.warning(f"Error parsing date '{date_str}' for {club_name}: {date_parse_err}")
-                                
-                            # Extract Hebrew day name after removing the date if present
-                            day_without_date = day_text_content
-                            if date_match:
-                                day_without_date = day_text_content.replace(date_match.group(0), '')
-                                
-                            # Now extract the Hebrew day name
-                            day_name_match = re.search(r'(ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)', day_without_date)
-                            if day_name_match:
-                                hebrew_day_name = day_name_match.group(1)
+                                    parsed_date = datetime.strptime(date_str_ddmmyyyy, '%d/%m/%Y')
+                                    iso_date_str = parsed_date.strftime('%Y-%m-%d')
+                                    # Try to extract Hebrew name by removing the date
+                                    potential_hebrew_name = day_text_content.replace(date_str_ddmmyyyy, '').strip()
+                                    # Remove potential leading/trailing non-Hebrew chars if needed
+                                    potential_hebrew_name = re.sub(r'^[\W\d]+|[\W\d]+$', '', potential_hebrew_name).strip()
+                                    if potential_hebrew_name and any('\u0590' <= char <= '\u05FF' for char in potential_hebrew_name):
+                                         hebrew_day_name = potential_hebrew_name
+                                    else: # Fallback if extraction failed
+                                        hebrew_day_name = day_text_content.split()[0] if day_text_content.split() else "Unknown"
+                                except ValueError as date_parse_err:
+                                     logging.warning(f"Could not parse date '{date_str_ddmmyyyy}' from header '{day_text_content}': {date_parse_err}")
+                                     hebrew_day_name = day_text_content # Use full text as fallback name
+                            else:
+                                 logging.warning(f"Could not find DD/MM/YYYY date in day header: '{day_text_content}'")
+                                 hebrew_day_name = day_text_content # Use full text as fallback name
+                                 
+                    # Use the Hebrew name for status messages, but the ISO date for data saving
+                    logging.info(f"--- Processing Day Column {day_col_index+1}: {hebrew_day_name} (Date: {iso_date_str or 'Not Found'}) ---")
+                    await self._send_status('day_processing', f'מעבד את יום {hebrew_day_name}', {"day": hebrew_day_name})
                     
-                    # If we couldn't extract a date but have a day name, try to calculate the date
-                    if not iso_date_str and hebrew_day_name != f"Unknown Day {day_col_index + 1}":
-                        # Map Hebrew days to numbers (0=Sunday, 6=Saturday)
-                        hebrew_to_weekday = {
-                            "ראשון": 0, "שני": 1, "שלישי": 2, "רביעי": 3,
-                            "חמישי": 4, "שישי": 5, "שבת": 6
-                        }
-                        if hebrew_day_name in hebrew_to_weekday:
-                            # Get today and calculate the date for the given day
-                            today = datetime.now()
-                            day_num = hebrew_to_weekday[hebrew_day_name]
-                            days_ahead = (day_num - today.weekday()) % 7
-                            future_date = today + timedelta(days=days_ahead)
-                            iso_date_str = future_date.strftime("%Y-%m-%d")
-                    
-                    # After all attempts, if we don't have a date, create a fallback one
                     if not iso_date_str:
-                        # Create a default date based on today + column index
-                        iso_date_str = (datetime.now() + timedelta(days=day_col_index)).strftime("%Y-%m-%d")
-                        logging.warning(f"Using fallback date {iso_date_str} for column {day_col_index+1} in {club_name}")
-                    
-                    logging.info(f"--- Processing Day Column {day_col_index+1}: {hebrew_day_name} (Date: {iso_date_str}) ---")
-                    await self._send_status('day_processing', f"מעבד את יום {hebrew_day_name}", {"day": hebrew_day_name})
-                    
-                    # Now find all class items within this day column
+                         logging.error(f"Cannot process classes for day column {day_col_index+1} because date could not be determined.")
+                         await self._send_status('warning', f"לא ניתן לעבד שיעורים עבור {hebrew_day_name} - תאריך לא זוהה.")
+                         continue # Skip to next day column if date is missing
+
+                    # Find class elements *within this day column*
                     class_elements = await day_column.query_selector_all(class_item_selector)
                     if not class_elements:
-                        logging.warning(f"No class elements found in day column {day_col_index+1} ({hebrew_day_name}) for {club_name}")
-                        continue
+                        logging.info(f"No class elements ('{class_item_selector}') found for day '{hebrew_day_name}' (column {day_col_index+1}).")
+                        await self._send_status('classes_found', f"לא נמצאו שיעורים ביום {hebrew_day_name}", {"club": club_name, "day": hebrew_day_name, "classes_count": 0})
+                        continue # Move to the next day column
 
                     logging.info(f"Found {len(class_elements)} class elements for day '{hebrew_day_name}'.")
 
@@ -717,15 +538,8 @@ class HolmesPlaceCrawler:
                                 "timestamp": datetime.now().isoformat()
                             }
                             
-                            # Store in both collections
-                            self.collected_class_data.append(class_data)
-                            
-                            # Also add to club-specific collection
-                            if club_name in self.club_to_classes:
-                                self.club_to_classes[club_name].append(class_data)
-                            else:
-                                self.club_to_classes[club_name] = [class_data]
-                                
+                            with open(self.filename, 'a', encoding='utf-8') as f:
+                                f.write(json.dumps(class_data, ensure_ascii=False) + '\n')
                             day_classes_found_count += 1
                             logging.debug(f"Saved class: {class_name} at {class_time} on {hebrew_day_name} ({iso_date_str}) in {club_name}")
 
@@ -743,274 +557,19 @@ class HolmesPlaceCrawler:
                     total_classes_found += day_classes_found_count
                     logging.info(f"Finished processing day '{hebrew_day_name}' ({iso_date_str}). Found {day_classes_found_count} classes.")
 
-                except Exception as day_error:
-                    logging.error(f"Error processing day column {day_col_index+1} for {club_name}: {type(day_error).__name__} - {day_error}", exc_info=True)
-                    await self._send_status('warning', f"שגיאה בעיבוד יום {hebrew_day_name} בסניף {club_name}")
-                    continue # Continue to the next day column
+                except Exception as day_col_error:
+                    # Catch errors specific to processing a whole day column (e.g., finding header)
+                    logging.error(f"Error processing day column {day_col_index+1} ('{hebrew_day_name}'): {type(day_col_error).__name__} - {day_col_error}", exc_info=True)
+                    await self._send_status('error', f"שגיאה בעיבוד עמודת יום {day_col_index+1} ({hebrew_day_name}) בסניף {club_name}")
+                    continue # Try the next day column
             
             logging.info(f"Finished processing all day columns for {club_name}. Total classes found: {total_classes_found}")
-            return total_classes_found
+            return total_classes_found # Return the total count for the club
 
-        except Exception as e:
-            error_msg = f"Error extracting classes for {club_name}: {type(e).__name__} - {e}"
-            logging.error(error_msg, exc_info=True)
-            await self._send_status('error', f"שגיאה בעיבוד שיעורים עבור {club_name}: {str(e)}")
-            return 0
-
-    async def _extract_club_opening_hours(self, club_name):
-        """Extract opening hours information from the club page."""
-        logging.info(f"Extracting opening hours for club: {club_name}")
-        opening_hours = {}
-        
-        try:
-            # Target the club details box
-            club_details_selector = "div.club-details-box"
-            club_details_element = await self.page.query_selector(club_details_selector)
-            
-            if not club_details_element:
-                logging.warning(f"Club details box not found for {club_name}")
-                return opening_hours
-                
-            # Find the club hours section which has the heading "שעות פעילות המועדון:"
-            hours_selector = "div.club-details-info:has(h3:text('שעות פעילות המועדון:'))"
-            hours_element = await club_details_element.query_selector(hours_selector)
-            
-            if not hours_element:
-                logging.warning(f"Opening hours section not found for {club_name}")
-                return opening_hours
-                
-            # Extract the hours from the <big> tag
-            hours_text_element = await hours_element.query_selector("big")
-            if not hours_text_element:
-                logging.warning(f"Opening hours text element not found for {club_name}")
-                return opening_hours
-                
-            hours_text = await hours_text_element.text_content()
-            if not hours_text:
-                logging.warning(f"No opening hours text found for {club_name}")
-                return opening_hours
-                
-            # Process the hours text which is typically formatted with line breaks
-            hours_lines = hours_text.strip().split('\n')
-            
-            for line in hours_lines:
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                # Try to parse each line into day and hours
-                # Format is typically "day: hours" or "day hours"
-                if ':' in line:
-                    day_part, hours_part = line.split(':', 1)
-                    opening_hours[day_part.strip()] = hours_part.strip()
-                elif '-' in line:  # Look for time ranges like "06:00-23:00"
-                    # Try to find the last occurrence of a letter before the time
-                    parts = re.split(r'(\d+:\d+)', line, 1)
-                    if len(parts) >= 2:
-                        day_part = parts[0].strip()
-                        hours_part = ''.join(parts[1:]).strip()
-                        opening_hours[day_part] = hours_part
-                else:
-                    # Just store the whole line if we can't parse it
-                    opening_hours[f"info_{len(opening_hours)}"] = line
-            
-            logging.info(f"Extracted opening hours for {club_name}: {opening_hours}")
-            # Save to the crawler's dictionary
-            self.club_to_opening_hours[club_name] = opening_hours
-            return opening_hours
-            
-        except Exception as e:
-            logging.error(f"Error extracting opening hours for {club_name}: {e}")
-            return opening_hours
-
-    async def _extract_club_address(self, club_name):
-        """Extract address information from the club page."""
-        logging.info(f"Extracting address for club: {club_name}")
-        address = ""
-        
-        try:
-            # Look for the address in the contact info section
-            address_selector = "div.club-details-info.contact-info a[href*='waze.com'] i.fas.fa-map-marker-alt"
-            address_element = await self.page.query_selector(address_selector)
-            
-            if address_element:
-                # Get the parent <a> element
-                parent_element = await address_element.evaluate_handle("el => el.parentElement")
-                if parent_element:
-                    address_text = await parent_element.text_content()
-                    # Clean up the address text (remove the icon text)
-                    if address_text:
-                        address = address_text.replace("ברק בן אבינועם", "").strip()
-                        
-            if address:
-                logging.info(f"Found address for {club_name}: {address}")
-                self.club_to_address[club_name] = address
-            else:
-                logging.warning(f"Could not find address for {club_name}")
-                
-        except Exception as e:
-            logging.error(f"Error extracting address for {club_name}: {e}")
-            
-        return address
-
-    async def _process_club(self, club_info):
-        """Processes a single club, extracting schedules and saving data."""
-        club_name = club_info["name"]
-        club_url = club_info["url"]
-        self.current_club_index += 1
-        
-        # Record start time for this club
-        self.club_start_times[club_name] = datetime.now().isoformat()
-        
-        await self._send_status('club_processing', 
-                              message=f"מעבד סניף {self.current_club_index}/{self.total_clubs}: {club_name}", 
-                              data={"club_name": club_name, 
-                                   "current": self.current_club_index, 
-                                   "total": self.total_clubs,
-                                   "progress_percent": round((self.current_club_index / self.total_clubs) * 100)})
-        
-        if self.clubs_filter and club_name not in self.clubs_filter:
-            logging.info(f"Skipping club {club_name} as it's not in the filter list")
-            self.processed_clubs[club_name] = "skipped"
-            return
-            
-        # Check if we should stop
-        if self.stop_event.is_set():
-            logging.warning(f"Stop event detected during: processing club {self.current_club_index}. Stopping crawl.")
-            return
-            
-        logging.info(f"Navigating to club page: {club_url}")
-        try:
-            await self._retry_operation(
-                lambda: self.page.goto(club_url, wait_until="networkidle"),
-                f"Navigate to club page: {club_url}"
-            )
-            
-            # Store region for this club
-            region = get_club_region(club_name)
-            self.club_to_region[club_name] = region
-            
-            # Extract opening hours and address before processing the schedule
-            await self._extract_club_opening_hours(club_name)
-            await self._extract_club_address(club_name)
-            
-            # Initialize an empty list for this club's classes
-            self.club_to_classes[club_name] = []
-            
-            # Process the class schedule
-            classes_count = await self._process_club_schedule(club_name)
-            
-            # Record end time for this club
-            self.club_end_times[club_name] = datetime.now().isoformat()
-            
-            if classes_count > 0:
-                logging.info(f"Club {club_name} marked as SUCCESS as some classes were processed.")
-                self.processed_clubs[club_name] = "success"
-                await self._send_status('club_success', 
-                                      message=f"עיבוד סניף {club_name} הסתיים (נמצאו שיעורים)",
-                                      data={"club_name": club_name})
-            else:
-                logging.warning(f"Club {club_name} marked as FAILED as no classes were processed.")
-                self.processed_clubs[club_name] = "failed"
-                if 'error_reason' not in self.crawl_results.get(club_name, {}):
-                    self.crawl_results[club_name]['error_reason'] = "No classes found"
-                await self._send_status('club_failed', 
-                                      message=f"עיבוד סניף {club_name} נכשל (לא נמצאו שיעורים)",
-                                      data={"club_name": club_name})
-                                      
-        except Exception as e:
-            # Record end time for this club even if it failed
-            self.club_end_times[club_name] = datetime.now().isoformat()
-            
-            if isinstance(e, asyncio.CancelledError):
-                raise  # Re-raise cancellation
-                
-            error_message = f"Error processing club {club_name}: {str(e)}"
-            logging.error(error_message)
-            
-            # Store the error reason in the crawl results
-            if club_name in self.crawl_results:
-                self.crawl_results[club_name]['error_reason'] = str(e)
-            else:
-                self.crawl_results[club_name] = {
-                    "status": "failed",
-                    "url": club_url,
-                    "error_reason": str(e)
-                }
-                
-            await self._send_status('club_failed', 
-                                  message=f"עיבוד סניף {club_name} נכשל",
-                                  data={"club_name": club_name})
-            self.processed_clubs[club_name] = "failed"
-
-    def _calculate_duration(self, start_time_str, end_time_str):
-        """Calculate duration in seconds between two ISO format timestamps"""
-        if not start_time_str or not end_time_str:
-            return None
-            
-        try:
-            start_time = datetime.fromisoformat(start_time_str)
-            end_time = datetime.fromisoformat(end_time_str)
-            duration = (end_time - start_time).total_seconds()
-            return duration
-        except Exception as e:
-            logging.warning(f"Error calculating duration: {e}")
-            return None
-    
-    def get_results(self):
-        """Returns a dictionary of all clubs with their classes."""
-        results = {}
-        
-        # Create consolidated results with one entry per club
-        for club_name, club_data in self.crawl_results.items():
-            # Create club entry with all available data
-            club_entry = {
-                "club_name": club_name,
-                "address": self.club_to_address.get(club_name, ""),
-                "opening_hours": self.club_to_opening_hours.get(club_name, ""),
-                "area": self.club_to_region.get(club_name, ""),
-                "start_time": self.club_start_times.get(club_name, ""),
-                "end_time": self.club_end_times.get(club_name, ""),
-                "duration": self._calculate_duration(
-                    self.club_start_times.get(club_name), 
-                    self.club_end_times.get(club_name)
-                ),
-                "status": club_data['status']
-            }
-            
-            # For successful clubs, include class data
-            if club_data['status'] == 'success':
-                club_entry["classes"] = self.club_to_classes.get(club_name, [])
-            # For failed clubs, include error info and screenshot link if available
-            else:
-                club_entry["classes"] = []  # Empty array for failed clubs
-                club_entry["error_reason"] = club_data.get('error_reason', "Unknown error")
-                
-                # Check for screenshot link in crawl_results
-                if 'screenshot' in club_data and club_data['screenshot']:
-                    # Include full URL for screenshot
-                    base_url = "http://localhost:8080/screenshots/"
-                    club_entry["screenshot_url"] = base_url + club_data['screenshot']
-                # If no screenshot in crawl_results, look in screenshots directory
-                else:
-                    screenshots_dir = os.path.join(os.path.dirname(self.output_dir), "screenshots")
-                    if os.path.exists(screenshots_dir):
-                        # Look for screenshots with the club name in them
-                        club_screenshots = [
-                            f 
-                            for f in os.listdir(screenshots_dir) 
-                            if club_name in f and f.endswith(".png")
-                        ]
-                        if club_screenshots:
-                            # Sort by timestamp (newest first) and take the most recent one
-                            club_screenshots.sort(reverse=True)
-                            # Include full URL for screenshot
-                            base_url = "http://localhost:8080/screenshots/"
-                            club_entry["screenshot_url"] = base_url + club_screenshots[0]
-            
-            results[club_name] = club_entry
-            
-        return results
+        except Exception as schedule_processing_error:
+             logging.error(f"Critical error processing schedule content in {container_selector} for {club_name}: {type(schedule_processing_error).__name__} - {schedule_processing_error}", exc_info=True)
+             await self._send_status('error', f"שגיאה קריטית בעיבוד תוכן המערכת עבור {club_name}: {str(schedule_processing_error)}")
+             raise schedule_processing_error
 
 # Example usage (if run directly)
 async def main():

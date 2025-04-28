@@ -1,0 +1,327 @@
+// ClassList.scss - Styles for the ClassList component
+@use './_variables' as *;
+
+.class-list {
+  padding: 1rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.opening-hours-header {
+  background-color: $light-bg-color;
+  padding: 0.5rem 1rem;
+  border-radius: $border-radius;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: $font-size-sm;
+  color: $secondary-text-color;
+
+  .opening-hours-title {
+    font-weight: $font-weight-medium;
+    color: $text-color;
+  }
+
+  .hours-entry {
+    white-space: nowrap;
+  }
+}
+
+.region-section {
+  margin-bottom: 2rem;
+}
+
+.region-title {
+  font-size: $font-size-large;
+  font-weight: $font-weight-bold;
+  color: $text-color;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid $border-color;
+}
+
+.day-section {
+  margin-bottom: 1.5rem;
+}
+
+.day-title {
+  font-size: $font-size-base;
+  font-weight: $font-weight-medium;
+  color: $secondary-text-color;
+  margin-bottom: 0.5rem;
+}
+
+.classes-container {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+  scrollbar-width: thin;
+  scrollbar-color: $secondary-color transparent;
+
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: $secondary-color;
+    border-radius: 3px;
+  }
+}
+
+.class-card {
+  flex: 0 0 auto;
+  width: 180px;
+  padding: 0.75rem;
+  background: $card-bg-color;
+  border-radius: $border-radius;
+  box-shadow: $box-shadow-light;
+  border: 1px solid $border-color;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  .class-time {
+    font-size: $font-size-base;
+    font-weight: $font-weight-bold;
+    color: $primary-color;
+  }
+
+  .class-name {
+    font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    color: $text-color;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .class-instructor {
+    font-size: $font-size-sm;
+    color: $secondary-text-color;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .class-club {
+    font-size: $font-size-sm;
+    color: $secondary-text-color;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.empty-message {
+  padding: 0.75rem;
+  text-align: center;
+  background-color: $light-bg-color;
+  border-radius: $border-radius;
+  font-size: $font-size-base;
+  color: $secondary-text-color;
+}
+
+.failed-clubs-message {
+  background-color: rgba($error-color, 0.05);
+  border: 1px solid rgba($error-color, 0.2);
+  border-radius: $border-radius;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  
+  h3 {
+    color: $error-color;
+    margin-top: 0;
+    margin-bottom: 0.25rem;
+    font-size: $font-size-base;
+  }
+  
+  .failed-clubs-list {
+    margin: 0;
+    padding-right: 0.5rem;
+    
+    .failed-club-item {
+      margin-bottom: 0.25rem;
+      
+      .club-name {
+        font-weight: $font-weight-bold;
+        display: block;
+        margin-bottom: 0.1rem;
+      }
+      
+      .failed-reason {
+        color: $secondary-text-color;
+        font-size: $font-size-sm;
+      }
+    }
+  }
+}
+
+.classes-grouped-list {
+  .region-group {
+    margin-bottom: 1.5rem;
+    
+    .region-title {
+      border-bottom: 1px solid $border-color;
+      padding-bottom: 0.25rem;
+      margin-bottom: 0.75rem;
+      font-size: 1.1rem;
+      color: $text-color;
+    }
+    
+    .days-list {
+      .day-group {
+        margin-bottom: 1rem;
+        
+        .day-header {
+          background-color: $light-bg-color;
+          padding: 0.5rem;
+          border-radius: $border-radius;
+          margin-bottom: 0.5rem;
+          display: flex;
+          align-items: center;
+          direction: rtl;
+          
+          .day-date {
+            font-weight: $font-weight-bold;
+            font-size: 0.9rem;
+            margin-left: 0.5rem;
+            color: $text-color;
+          }
+          
+          .day-name {
+            font-size: 0.85rem;
+            color: $secondary-text-color;
+          }
+        }
+        
+        .day-classes {
+          border-right: 3px solid $border-color;
+          padding-right: 0.5rem;
+          display: flex;
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: flex-start;
+          
+          .class-item {
+            padding: 0.5rem;
+            border: 1px solid $border-color;
+            border-radius: $border-radius;
+            margin-bottom: 0.5rem;
+            margin-left: 0.5rem;
+            direction: rtl;
+            width: calc(33.333% - 0.5rem);
+            min-width: 180px;
+            max-width: 250px;
+            display: flex;
+            flex-direction: column;
+            
+            &:hover {
+              background-color: rgba($light-bg-color, 0.7);
+              box-shadow: $box-shadow;
+            }
+            
+            &.class-item--past {
+              opacity: 0.6;
+              background-color: $light-bg-color;
+            }
+            
+            .class-time {
+              font-weight: $font-weight-bold;
+              color: $primary-color;
+              font-size: 0.9rem;
+              margin-bottom: 0.3rem;
+              display: block;
+            }
+            
+            .class-name {
+              font-weight: $font-weight-bold;
+              font-size: $font-size-base;
+              margin-bottom: 0.3rem;
+              color: $text-color;
+              display: block;
+            }
+            
+            .class-details {
+              display: flex;
+              flex-direction: column;
+              font-size: $font-size-sm;
+              color: $secondary-text-color;
+              
+              .instructor {
+                margin-bottom: 0.2rem;
+                display: block;
+              }
+              
+              .club-name {
+                color: $primary-color;
+                font-weight: $font-weight-medium;
+                margin-bottom: 0.2rem;
+                display: block;
+              }
+              
+              .location {
+                color: $secondary-text-color;
+                display: block;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Media queries for responsive design
+@media (max-width: 768px) {
+  .classes-container {
+    .classes-grouped-list {
+      .region-group {
+        .days-list {
+          .day-group {
+            .day-classes {
+              .class-item {
+                width: calc(50% - 0.5rem);
+                min-width: 150px;
+                
+                .class-name {
+                  font-size: 0.9rem;
+                }
+                
+                .class-details {
+                  font-size: 0.75rem;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .classes-container {
+    .classes-grouped-list {
+      .region-group {
+        .days-list {
+          .day-group {
+            .day-classes {
+              .class-item {
+                width: 100%;
+                margin-left: 0;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} 

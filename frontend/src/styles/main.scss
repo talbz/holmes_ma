@@ -1,17 +1,107 @@
+// Import variables
+@use 'variables' as *;
+
+// Base styles
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: $font-family;
+  font-size: $font-size-base;
+  line-height: 1.5;
+  color: $text-color;
+  background-color: $light-bg-color;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+// Global utility classes
+.text-center {
+  text-align: center;
+}
+
+.mt-1 { margin-top: $spacing-unit; }
+.mt-2 { margin-top: $spacing-unit * 2; }
+.mt-3 { margin-top: $spacing-unit * 3; }
+.mb-1 { margin-bottom: $spacing-unit; }
+.mb-2 { margin-bottom: $spacing-unit * 2; }
+.mb-3 { margin-bottom: $spacing-unit * 3; }
+
+// Animations
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+@keyframes flash {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+
+// Import component styles
+@import 'App';
+@import 'ConnectionStatus';
+@import 'CrawlerControls';
+@import 'CrawlerStatus';
+@import 'Filters';
+@import 'ClubList';
+@import 'ClassList';
+@import 'toast';
+
+// Import modern color module
+@use "sass:color";
+
 // Import variables and mixins
-@use 'sass:color';
 @use 'variables' as *;
 
 // Import component-specific styles
 @forward 'toast';
 
 // Base styles
+$primary-color: #007bff;
+$secondary-color: #6c757d;
+$success-color: #28a745;
+$error-color: #dc3545;
+$warning-color: #ffc107;
+$info-color: #17a2b8;
+$light-bg-color: #f8f9fa;
+$dark-bg-color: #343a40;
+$text-color: #212529;
+$secondary-text-color: #6c757d;
+$border-color: #dee2e6;
+$card-bg-color: white;
+$accent-color: #ff9800;
+
+// Typography
+$font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+$font-size-base: 1rem;
+$font-size-sm: 0.875rem;
+$font-size-small: 0.875rem;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-bold: 700;
+
+// Spacing and sizing
+$border-radius: 4px;
+$transition-base: all 0.3s ease;
+$box-shadow-light: 0 2px 4px rgba(0, 0, 0, 0.1);
+$primary-text-color: #212529;
+
 body {
-  margin: 0;
-  font-family: $font-family;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f5f5f5;
 }
 
 .App {
@@ -50,27 +140,78 @@ body {
 .connection-status {
   position: absolute;
   top: 10px;
-  left: 10px;
-  font-size: $font-size-sm;
-  padding: 8px 12px;
-  border-radius: 20px;
-  background-color: $light-bg-color;
-  border: 1px solid $border-color;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-  
-  .status-connected {
-    color: $success-color;
-    font-weight: $font-weight-bold;
+  left: 20px; 
+  padding: 8px 15px;
+  border-radius: $border-radius;
+  font-size: 0.9em;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+
+  .status-text {
+    flex-grow: 1;
   }
-  
-  .status-disconnected {
-    color: $error-color;
-    font-weight: $font-weight-bold;
+
+  .reconnect-button {
+    background: none;
+    border: 1px solid currentColor;
+    color: inherit;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.2s ease, opacity 0.2s ease;
+    
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.2);
+    }
+    
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      background-color: transparent;
+    }
   }
-  
-  .status-error {
-    color: $warning-color;
-    font-weight: $font-weight-bold;
+
+  // Connected state
+  &.status-connected {
+    background-color: rgba($success-color, 0.1);
+    border-color: $success-color;
+    color: darken($success-color, 10%);
+    
+    // Add checkmark icon
+    &::before {
+      content: '✓'; // Simple checkmark
+      font-weight: bold;
+      color: $success-color;
+    }
+  }
+
+  // Connecting state
+  &.status-connecting {
+    background-color: rgba($info-color, 0.1);
+    border-color: $info-color;
+    color: darken($info-color, 10%);
+    // Add spinner/ellipsis? Maybe later
+  }
+
+  // Disconnected state
+  &.status-disconnected {
+    background-color: rgba($warning-color, 0.1);
+    border-color: $warning-color;
+    color: darken($warning-color, 20%);
+    animation: pulse 2s infinite;
+  }
+
+  // Error state
+  &.status-error {
+    background-color: rgba($error-color, 0.1);
+    border-color: $error-color;
+    color: darken($error-color, 10%);
+    animation: flash 1s infinite;
   }
 }
 
@@ -255,265 +396,285 @@ body {
   }
 }
 
-// Classes container
+// Updated ClassList styles for time-based organization
 .classes-container {
-  background-color: $light-bg-color;
-  padding: 20px;
-  border-radius: $border-radius;
+  margin-top: 0.5rem;
+  width: 100%;
   
-  h2 {
-    margin-top: 0;
-    margin-bottom: 8px;
-    padding-bottom: 5px;
-    font-size: 1.5em;
-    border-bottom: 2px solid $border-color;
-  }
-  
-  .loading-message, .error-message, .empty-message {
+  .empty-message {
+    padding: 0.75rem;
     text-align: center;
-    padding: 20px;
-    color: $text-color;
+    background-color: #f8f8f8;
+    border-radius: 4px;
+    font-size: 1rem;
+    color: #666;
   }
   
-  .error-message {
-    color: $error-color;
-  }
-}
-
-.classes-grouped-list {
-  .region-group {
-    margin-bottom: 12px;
-  }
-
-  .region-title {
-    background-color: darken($light-bg-color, 5%);
-    color: $secondary-text-color;
-    padding: 5px 8px;
-    margin-top: 0;
-    margin-bottom: 6px;
-    font-size: 1.2em;
-    border-radius: $border-radius;
-    border-bottom: 1px solid $border-color;
-  }
-
-  .clubs-container-for-region {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 15px;
-    margin-left: 8px;
-    margin-bottom: 10px;
-  }
-
-  .club-group {
-    margin-bottom: 0;
-    flex: 1 1 250px;
-    min-width: 220px;
-  }
-
-  .club-title {
-    margin-top: 0;
-    margin-bottom: 4px;
-    font-size: 1.05em;
-    color: darken($text-color, 10%);
-    padding-bottom: 2px;
-    border-bottom: 1px dashed #ccc;
-  }
-
-  .classes-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 6px;
-  }
-
-  .class-card {
-    padding: 3px 5px;
-    font-size: 0.9em;
-    line-height: 1.2;
-    border-width: 1px;
-    margin: 0;
-    background-color: $card-bg-color;
-    border: 1px solid $border-color;
-    border-radius: $border-radius;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-    transition: transform 0.15s;
-
-    &:hover {
-      box-shadow: 0 2px 4px rgba(0,0,0,0.12);
-      transform: translateY(-2px);
-    }
-
-    // --- Line 1 Styling --- 
-    p.class-card-line1 {
-      margin: 0 0 1px 0;
-      padding: 0;
-      font-size: 1.1em;
-      white-space: nowrap; 
-      overflow: hidden;
-      text-overflow: ellipsis;
-      line-height: 1.25;
-
-      span.time {
-        font-weight: bold;
-        color: $primary-color; 
-        margin-left: 5px;
-      }
-      span.day-name {
-         color: $text-color;
-         margin-left: 5px;
-      }
-      span.date-dm {
-          color: $text-color;
-      }
-      span.past-indicator {
-          font-size: 0.8em; 
-          font-style: italic;
-          font-weight: normal; 
-          color: lighten($error-color, 8%);
-          margin-right: 4px;
-      }
+  .failed-clubs-message {
+    background-color: #fff6f6;
+    border: 1px solid #ffd7d7;
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    
+    h3 {
+      color: #d32f2f;
+      margin-top: 0;
+      margin-bottom: 0.25rem;
+      font-size: 1rem;
     }
     
-    // --- Line 2 Styling --- 
-    p.class-card-line2 {
+    .failed-clubs-list {
       margin: 0;
-      padding: 0;
-      font-size: 0.9em;
-      white-space: nowrap; 
-      overflow: hidden;
-      text-overflow: ellipsis;
-      color: $secondary-text-color;
-      line-height: 1.1;
+      padding-right: 0.5rem;
       
-      span.name {
-          // Name is default style for the line
-      }
-      span.instructor {
-           color: darken($secondary-text-color, 10%);
+      .failed-club-item {
+        margin-bottom: 0.25rem;
+        
+        .club-name {
+          font-weight: bold;
+          display: block;
+          margin-bottom: 0.1rem;
+        }
+        
+        .failed-reason {
+          color: #666;
+          font-size: 0.8rem;
+        }
       }
     }
-
-    // Style for past class card overall (adjust dimming for new structure)
-    &.class-card--past {
-        opacity: 0.6; 
-        background-color: #f8f8f8; 
-        border-color: #e0e0e0;
-        box-shadow: none; 
-        
-        // Dim line 1
-        p.class-card-line1 {
-             color: lighten($secondary-text-color, 25%);
-             span.time {
-                 color: lighten($primary-color, 45%); 
-                 font-weight: normal; 
-             }
-             span.past-indicator {
-                 color: lighten($error-color, 30%); 
-             }
+  }
+  
+  .classes-grouped-list {
+    .region-group {
+      margin-bottom: 1rem;
+      
+      .region-title {
+        border-bottom: 1px solid #eee;
+        padding-bottom: 0.25rem;
+        margin-bottom: 0.5rem;
+        font-size: 1.1rem;
+        color: #333;
+      }
+      
+      .time-groups-for-region {
+        .time-group {
+          margin-bottom: 0.5rem;
+          
+          .classes-row {
+            display: flex;
+            flex-flow: row wrap; // Use flex-flow to control direction and wrapping
+            gap: 0.5rem; // Slightly bigger gap
+            margin-bottom: 0.5rem;
+            justify-content: flex-start; // Align to the left
+            direction: ltr; // Left-to-right to match the alignment request
+            
+            .class-card {
+              flex: 0 0 auto;
+              min-width: 180px; // Slightly wider cards
+              max-width: 220px; // Slightly wider max-width
+              background-color: white;
+              border: 1px solid #e0e0e0;
+              border-radius: 3px; // Smaller border radius
+              padding: 0.5rem; // More padding for better spacing
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+              transition: transform 0.15s ease;
+              position: relative; // For absolute positioning of time
+              margin-bottom: 0.2rem;
+              direction: rtl; // Keep the content RTL, just the layout is LTR
+              
+              &:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+              }
+              
+              &.class-card--past {
+                opacity: 0.6;
+                background-color: #f9f9f9;
+              }
+              
+              // Time indicator in top-right corner
+              .card-time {
+                position: absolute;
+                top: 0;
+                right: 0;
+                background-color: #f5f5f5;
+                padding: 1px 3px;
+                border-radius: 0 3px 0 3px;
+                font-size: 0.65rem;
+                font-weight: bold;
+                color: #555;
+              }
+              
+              .class-card-line1 {
+                margin: 0.4rem 0 0.15rem 0; // Add top margin to avoid overlap with time
+                display: inline-block; // Keep on same line
+                width: 100%;
+                
+                .name {
+                  font-weight: bold;
+                  font-size: 0.8rem; // Smaller font
+                  color: #333;
+                  display: block;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                }
+              }
+              
+              .class-card-line2 {
+                margin: 0;
+                display: flex;
+                justify-content: space-between;
+                font-size: 0.7rem; // Smaller font
+                color: #666;
+                
+                .instructor {
+                  margin-left: auto;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  max-width: 60%;
+                }
+                
+                .club-name {
+                  color: #2196f3;
+                  font-weight: 500;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  max-width: 40%;
+                }
+              }
+            }
+          }
         }
-        // Dim line 2
-        p.class-card-line2 {
-             color: lighten($secondary-text-color, 25%);
-             span.instructor {
-                 color: lighten($secondary-text-color, 20%);
-             }
-        }
+      }
     }
   }
 }
 
 // Crawler Status Styles
 .crawler-status {
-  background-color: #e9ecef;
+  background-color: $light-bg-color;
   border-radius: $border-radius;
-  padding: 15px;
-  margin: 20px 0;
-  border: 2px solid $primary-color;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
-  transition: $transition-base;
-  
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: $box-shadow-light;
+  direction: rtl;
+
   h3 {
     margin-top: 0;
-    color: $secondary-text-color;
-    border-bottom: 1px solid $border-color;
-    padding-bottom: 8px;
+    color: $primary-text-color;
     margin-bottom: 15px;
+    font-weight: $font-weight-bold;
+  }
+
+  .status-message {
+    margin-bottom: 10px;
+    font-size: $font-size-base;
+  }
+
+  .current-club,
+  .current-day {
+    margin: 5px 0;
+    font-size: $font-size-base;
+    color: $secondary-text-color;
+    font-weight: $font-weight-medium;
+  }
+
+  .progress-container {
+    margin-top: 15px;
+    margin-bottom: 20px;
+    height: 20px;
+    background-color: $border-color;
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(to right, #4caf50, #8bc34a);
+    transition: width 0.3s ease-in-out;
+    border-radius: 10px;
+    
+    &.progress-low {
+      background: linear-gradient(to right, #ff9800, #ffeb3b);
+    }
+    
+    &.progress-medium {
+      background: linear-gradient(to right, #2196f3, #03a9f4);
+    }
+    
+    &.progress-high {
+      background: linear-gradient(to right, #4caf50, #8bc34a);
+    }
+  }
+
+  .progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-weight: $font-weight-bold;
+    text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
+    font-size: 14px;
+  }
+
+  // Enhanced stop button inside crawler status
+  .crawler-status-stop {
+    margin-top: 5px;
+    padding: 8px 16px;
+    font-size: $font-size-small;
   }
   
-  .status-container {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    
-    .status-message {
-      font-weight: $font-weight-bold;
+  // Completion message styling
+  &.crawler-status-complete {
+    background-color: #e8f5e9;
+    border-left: 5px solid #4caf50;
+    animation: fade-out 10s forwards 5s;
+
+    h3 {
+      color: #2e7d32;
+    }
+
+    .completion-time {
+      font-size: $font-size-small;
       color: $secondary-text-color;
-      padding: 8px;
-      border-radius: $border-radius;
-      background-color: $light-bg-color;
+      margin-top: 5px;
     }
-    
-    .status-detail {
-      font-size: $font-size-sm;
-      padding: 6px 10px;
-      background-color: $card-bg-color;
-      border-radius: $border-radius;
-      border-left: 3px solid $primary-color;
+  }
+  
+  // Error status styling
+  &.crawler-status-error {
+    background-color: #ffebee;
+    border-left: 5px solid #f44336;
+
+    h3 {
+      color: #c62828;
     }
-    
-    .progress-bar-container {
-      height: 20px;
-      background-color: #e2e2e2;
-      border-radius: 10px;
-      overflow: hidden;
-      position: relative;
-      margin-top: 10px;
-      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
-      
-      .progress-bar {
-        height: 100%;
-        transition: width 0.3s ease;
-        background-size: 40px 40px;
-        animation: progress-bar-stripes 2s linear infinite;
-        
-        &.progress-low {
-          background-color: $warning-color;
-        }
-        
-        &.progress-medium {
-          background-color: $info-color;
-        }
-        
-        &.progress-high {
-          background-color: $success-color;
-        }
-        
-        background-image: linear-gradient(
-          45deg, 
-          rgba(255, 255, 255, 0.15) 25%, 
-          transparent 25%, 
-          transparent 50%, 
-          rgba(255, 255, 255, 0.15) 50%, 
-          rgba(255, 255, 255, 0.15) 75%, 
-          transparent 75%, 
-          transparent
-        );
-      }
-      
-      .progress-text {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #000;
-        font-weight: $font-weight-bold;
-        font-size: 12px;
-        text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
-      }
-    }
+  }
+}
+
+// Last crawl info display
+.last-crawl-info {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: $border-radius;
+  text-align: center;
+  font-size: $font-size-small;
+  color: $secondary-text-color;
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.6;
   }
 }
 
@@ -522,10 +683,82 @@ body {
   margin-bottom: 20px;
   
   h3 {
-    margin-top: 0;
-    color: $text-color;
+    margin-bottom: 15px;
     border-bottom: 2px solid $border-color;
     padding-bottom: 10px;
+  }
+}
+
+// Add styles for clubs header and action buttons
+.clubs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  
+  .clubs-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    
+    h3 {
+      margin: 0;
+      padding: 0;
+      font-size: 1.2rem;
+    }
+  }
+  
+  .clubs-selected-count {
+    font-size: 0.9em;
+    margin-right: 5px;
+    color: $accent-color;
+    background-color: rgba($accent-color, 0.1);
+    padding: 3px 8px;
+    border-radius: 12px;
+  }
+  
+  .clubs-actions {
+    display: flex;
+    gap: 10px;
+  }
+}
+
+.club-action-button {
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  min-width: 80px;
+  
+  &.select-all {
+    background-color: #4CAF50;
+    color: white;
+    
+    &:hover {
+      background-color: darken(#4CAF50, 10%);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+  }
+  
+  &.clear-all {
+    background-color: #f44336;
+    color: white;
+    
+    &:hover {
+      background-color: darken(#f44336, 10%);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+  }
+  
+  &:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 }
 
@@ -533,6 +766,7 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 15px;
+  margin-top: 20px;
 }
 
 /* Club Item Styles */
@@ -540,19 +774,68 @@ body {
   padding: 10px;
   border: 1px solid #ddd;
   border-radius: 4px;
-  margin: 5px;
+  margin: 0;
   cursor: pointer;
   transition: all 0.3s ease;
   background-color: #fff;
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.club-item:hover {
+.club-item-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.club-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.checkbox-visual {
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #aaa;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: white;
+  transition: all 0.2s ease;
+  
+  &.checked {
+    background-color: #2196f3;
+    border-color: #2196f3;
+  }
+}
+
+.checkbox-checkmark {
+  color: white;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: bold;
+}
+
+.club-item:hover:not(.club-item-failed) {
   background-color: #f5f5f5;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  
+  .checkbox-visual:not(.checked) {
+    border-color: #2196f3;
+  }
 }
 
 .club-item.club-item-selected {
   background-color: #e3f2fd;
   border-color: #2196f3;
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.3);
+  font-weight: bold;
 }
 
 .club-item.club-item-processing {
@@ -570,6 +853,30 @@ body {
   background-color: #ffebee;
   border-color: #f44336;
   opacity: 0.7;
+}
+
+.club-item.club-item-no-data {
+  background-color: #f5f5f5;
+  border-color: #9e9e9e;
+  opacity: 0.8;
+}
+
+.club-item-badge {
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  background-color: #f44336;
+  color: white;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.club-item-no-data .club-item-badge {
+  background-color: #9e9e9e;
+}
+
+.checkbox-visual.disabled {
+  border-color: #cccccc;
+  background-color: #eeeeee;
 }
 
 // Animations
@@ -590,27 +897,6 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba($warning-color, 0.4);
-  }
-  70% {
-    box-shadow: 0 0 0 10px rgba($warning-color, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba($warning-color, 0);
-  }
-}
-
-@keyframes flash {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
   }
 }
 
@@ -709,6 +995,216 @@ input:checked + .slider:before {
 
 .slider.round:before {
   border-radius: 50%;
+}
+
+// Data freshness indicator
+.data-freshness-indicator {
+  display: flex;
+  align-items: center;
+  padding: 12px 15px;
+  margin-bottom: 15px;
+  border-radius: 6px;
+  background-color: #e8f5e9;
+  border: 1px solid #c8e6c9;
+  
+  &.data-stale {
+    background-color: #fff8e1;
+    border-color: #ffecb3;
+  }
+  
+  &.data-partial {
+    background-color: #e3f2fd;
+    border-color: #bbdefb;
+  }
+  
+  .freshness-content {
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+  
+  .freshness-icon {
+    font-size: 18px;
+    margin-left: 12px;
+    margin-right: 0; // RTL layout
+  }
+  
+  .freshness-text {
+    flex: 1;
+    
+    p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.4;
+      
+      .partial-crawl-indicator {
+        color: #0d47a1;
+        font-weight: 500;
+      }
+    }
+  }
+  
+  .refresh-button {
+    background-color: $primary-color;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    
+    &:hover {
+      background-color: darken($primary-color, 10%);
+    }
+  }
+}
+
+// Area clubs section
+.area-clubs {
+  margin-bottom: 25px;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  overflow: hidden;
+  
+  .area-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: #f5f5f5;
+    border-bottom: 1px solid #e5e5e5;
+    
+    .area-title {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: $text-color;
+    }
+    
+    .area-actions {
+      display: flex;
+      gap: 8px;
+    }
+  }
+  
+  .clubs-grid {
+    padding: 15px;
+    margin-top: 0;
+  }
+  
+  .area-action-button {
+    border: none;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    
+    &.select-area {
+      background-color: #4CAF50;
+      color: white;
+      
+      &:hover {
+        background-color: darken(#4CAF50, 10%);
+      }
+    }
+    
+    &.clear-area {
+      background-color: #f44336;
+      color: white;
+      
+      &:hover {
+        background-color: darken(#f44336, 10%);
+      }
+    }
+  }
+}
+
+// Error handling styles
+.error-boundary, .error-fallback {
+  text-align: center;
+  padding: 40px 20px;
+  margin: 20px auto;
+  max-width: 800px;
+  background-color: #fff3e0;
+  border: 1px solid #ffccbc;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  
+  h1 {
+    color: #d32f2f;
+    margin-bottom: 15px;
+  }
+  
+  p {
+    margin-bottom: 20px;
+    font-size: 18px;
+  }
+  
+  button {
+    background-color: #2196f3;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    
+    &:hover {
+      background-color: #1976d2;
+    }
+  }
+  
+  details {
+    margin-top: 30px;
+    text-align: left;
+    
+    pre {
+      background-color: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      overflow: auto;
+      margin-top: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+  }
+}
+
+.no-clubs-message {
+  text-align: center;
+  padding: 30px;
+  margin: 20px 0;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  
+  p {
+    margin-bottom: 15px;
+    font-size: 16px;
+    color: #616161;
+  }
+  
+  .refresh-button {
+    background-color: $primary-color;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    
+    &:hover {
+      background-color: darken($primary-color, 10%);
+    }
+  }
 }
 
 // End of file 

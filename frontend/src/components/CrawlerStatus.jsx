@@ -2,6 +2,7 @@ import React from 'react';
 import { memo, useMemo } from 'react';
 import classNames from 'classnames';
 import PropTypes from 'prop-types';
+import '../styles/CrawlerStatus.scss';
 
 export const CrawlerStatus = memo(({ status, isError }) => {
   const {

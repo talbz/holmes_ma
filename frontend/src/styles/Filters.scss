@@ -1,0 +1,134 @@
+@use './_variables' as *;
+
+.filters {
+  background-color: $light-bg-color;
+  padding: 20px;
+  border-radius: $border-radius;
+  margin-bottom: 20px;
+  
+  .filter-group {
+    margin-bottom: 15px;
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: $text-color;
+      font-weight: $font-weight-bold;
+    }
+    
+    input, select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid $border-color;
+      border-radius: $border-radius;
+      font-size: $font-size-base;
+      
+      &:focus {
+        outline: none;
+        border-color: $primary-color;
+        box-shadow: 0 0 0 2px rgba($primary-color, 0.2);
+      }
+    }
+  }
+  
+  .days-filter {
+    margin-top: 15px; 
+
+    > label {
+      margin-bottom: 5px;
+      display: block; 
+      font-weight: $font-weight-bold;
+    }
+
+    .checkbox-group {
+      display: flex; 
+      flex-wrap: wrap; 
+      gap: 4px 10px;
+      padding: 8px 10px;
+      border: 1px solid $border-color; 
+      border-radius: $border-radius;
+      background-color: white;
+      align-items: center;
+    }
+
+    .checkbox-item {
+      display: flex; 
+      align-items: center;
+      margin: 0; 
+      padding: 2px 0; 
+
+      input[type="checkbox"] {
+        margin: 0 4px 0 0;
+        order: 2;
+        cursor: pointer;
+      }
+
+      label {
+        margin: 0; 
+        cursor: pointer;
+        font-size: $font-size-sm; 
+        white-space: nowrap; 
+        line-height: 1.2; 
+        padding: 0;
+        order: 1;
+      }
+
+      &.all-days-checkbox {
+         margin-right: 10px;
+         padding-right: 10px;
+         border-right: 1px solid #ccc;
+         margin-left: 0;
+         padding-left: 0;
+         border-left: none;
+         label {
+             font-weight: $font-weight-bold;
+         }
+      }
+    }
+  }
+  
+  .filter-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: $border-radius;
+      cursor: pointer;
+      font-weight: $font-weight-bold;
+      transition: $transition-base;
+      
+      &.apply-filters {
+        background-color: $primary-color;
+        color: white;
+        
+        &:hover {
+          background-color: darken($primary-color, 10%);
+        }
+      }
+      
+      &.reset-filters {
+        background-color: $light-bg-color;
+        color: $text-color;
+        border: 1px solid $border-color;
+        
+        &:hover {
+          background-color: darken($light-bg-color, 5%);
+        }
+      }
+    }
+  }
+}
+
+// Responsive adjustments
+@media (max-width: 768px) {
+  .filter-row {
+    flex-direction: column;
+  }
+  
+  .filter-group {
+    margin-bottom: 10px;
+  }
+} 

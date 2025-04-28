@@ -1,0 +1,4 @@
+fastapi>=0.85.0
+uvicorn[standard]>=0.18.3
+playwright>=1.30.0
+pytz>=2023.3 

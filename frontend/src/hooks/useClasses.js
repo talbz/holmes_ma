@@ -1,4 +1,6 @@
 import { useQuery } from 'react-query';
+import axios from 'axios'; // Import axios
+import qs from 'qs'; // Import qs
 
 /**
  * Hook to fetch classes from the API with filtering options
@@ -16,35 +18,40 @@ export const useClasses = (filters = {}) => {
       console.log("[useClasses Query Function] Using filters:", filters); 
       // ---------------------------------------------
       
-      const params = new URLSearchParams();
-      
-      Object.entries(filters).forEach(([key, value]) => {
-        // Ensure only 'class_name' is used, not 'className'
+      // Clean the filters: remove empty arrays or null/undefined values
+      const cleanedFilters = Object.entries(filters).reduce((acc, [key, value]) => {
+          if (value !== null && value !== undefined) {
+              if (Array.isArray(value) && value.length === 0) {
+                  // Skip empty arrays
+              } else if (typeof value === 'string' && value.trim() === '') {
+                  // Skip empty strings
+              } else {
+                  // Map potentially incorrect keys (e.g., className -> class_name)
         const paramKey = key === 'className' ? 'class_name' : key;
-
-        if (value) {
-          if (Array.isArray(value)) {
-            // For arrays (like day_name_hebrew), append each value separately
-            value.forEach(item => params.append(paramKey, item));
-          } else {
-            // For single values, append normally
-            params.append(paramKey, value);
+                  acc[paramKey] = value;
+              }
           }
-        }
-      });
+          return acc;
+      }, {});
       
-      const url = `http://localhost:8080/classes?${params.toString()}`;
-      console.log("[useClasses Query Function] Fetching URL:", url); // Log fetch URL
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        console.error("[useClasses Query Function] Fetch failed", response.status, response.statusText);
-        throw new Error('Failed to fetch classes');
+      console.log("[useClasses Query Function] Cleaned filters for API:", cleanedFilters);
+
+      // Use axios.get with the `params` option, which handles serialization correctly
+      const url = `http://localhost:8080/classes`;
+      try {
+          const response = await axios.get(url, {
+              params: cleanedFilters,
+              // Use qs library for parameter serialization
+              paramsSerializer: params => {
+                  return qs.stringify(params, { arrayFormat: 'repeat' }); // Use 'repeat' for FastAPI compatibility
+              }
+          });
+          console.log("[useClasses Query Function] Received data via axios:", response.data);
+          return response.data;
+      } catch (error) {
+          console.error("[useClasses Query Function] Fetch failed via axios", error.response?.status, error.message);
+          throw new Error(error.response?.data?.detail || 'Failed to fetch classes');
       }
-      
-      const data = await response.json();
-      console.log("[useClasses Query Function] Received data", data); // Log received data
-      return data;
     },
     {
       staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
