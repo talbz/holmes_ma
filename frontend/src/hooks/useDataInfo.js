@@ -8,11 +8,27 @@ export const useCrawlStatus = () => {
   return useQuery(
     ['crawl-status'],
     async () => {
-      const response = await fetch('http://localhost:8080/crawl-status');
+      const response = await fetch('http://localhost:8000/api/crawl-status');
       if (!response.ok) {
         throw new Error('Failed to fetch crawl status information');
       }
-      return await response.json();
+      const data = await response.json();
+      
+      // Calculate days since last crawl if we have a date
+      let days_since_crawl = null;
+      if (data.latest_crawl_date) {
+        const lastCrawlDate = new Date(data.latest_crawl_date);
+        const now = new Date();
+        days_since_crawl = Math.floor((now - lastCrawlDate) / (1000 * 60 * 60 * 24));
+      }
+      
+      // Return the data with additional calculated fields
+      return {
+        ...data,
+        days_since_crawl,
+        is_stale: days_since_crawl !== null && days_since_crawl > 7, // Consider data stale after 7 days
+        has_data: data.latest_crawl_date !== null
+      };
     },
     {
       staleTime: 60 * 1000, // 1 minute - keep relatively fresh

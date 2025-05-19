@@ -37,7 +37,7 @@ export const useClasses = (filters = {}) => {
       console.log("[useClasses Query Function] Cleaned filters for API:", cleanedFilters);
 
       // Use axios.get with the `params` option, which handles serialization correctly
-      const url = `http://localhost:8080/classes`;
+      const url = `http://localhost:8000/api/classes`;
       try {
           const response = await axios.get(url, {
               params: cleanedFilters,

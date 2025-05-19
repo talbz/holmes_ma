@@ -9,7 +9,7 @@ export const useCrawler = () => {
   
   return useMutation(
     async ( { headless = false } ) => {
-      const response = await fetch('http://localhost:8080/start-crawl', {
+      const response = await fetch('http://localhost:8000/api/start-crawl', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -53,7 +53,7 @@ export const useCrawler = () => {
 export const useStopCrawler = () => {
   return useMutation(
     async () => {
-      const response = await fetch('http://localhost:8080/stop-crawl', {
+      const response = await fetch('http://localhost:8000/api/stop-crawl', {
         method: 'POST',
       });
       

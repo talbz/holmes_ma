@@ -1,1056 +1,599 @@
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Query
-from fastapi.middleware.cors import CORSMiddleware
-import glob
-import json
+import sys
 import os
-import asyncio
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-# Import the crawler
-from crawler import HolmesPlaceCrawler
-import subprocess
-import logging
-from pydantic import BaseModel
-import traceback # Import traceback for detailed error logging
+
+# Add project root to Python path to fix import issues
+# This assumes 'backend' is a sub-directory of the project root.
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root) # Insert at the beginning
+
+from fastapi import FastAPI, WebSocket, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import asyncio
+import json
+from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
+from datetime import datetime
+import logging
 from fastapi.responses import FileResponse
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(levelname)s - %(message)s')
+from backend.utils.websocket_manager import websocket_manager
+from backend.utils.data_utils import (
+    get_latest_jsonl_file,
+    read_jsonl_file,
+    calculate_days_since_crawl
+)
+from backend.crawler import HolmesPlaceCrawler
+from backend.utils.logger import logger
+from backend.utils.config import Config
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting Holmes Place Crawler API")
+    Config.ensure_output_dir()
+    yield
+    # Shutdown
+    logger.info("Shutting down Holmes Place Crawler API")
 
-# Configure CORS with more specific settings
-origins = [
-    "http://localhost:3001",
-    "http://127.0.0.1:3001",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "*"  # For development only - remove in production
-]
+app = FastAPI(title="Holmes Place Crawler API", lifespan=lifespan)
 
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global event to signal crawler termination
-crawler_stop_event = asyncio.Event()
+# Mount static files
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend/dist")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+else:
+    logger.warning(f"Static directory not found: {static_dir}")
 
-# Class to manage WebSocket connections
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logging.info(f"WebSocket connection accepted from {websocket.client.host}")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-            logging.info(f"WebSocket connection removed from active connections")
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections.copy():
-            try:
-                await connection.send_text(message)
-            except Exception as e:
-                logging.error(f"Error broadcasting message: {str(e)}")
-                self.active_connections.remove(connection)
-
-# Create a connection manager instance
-manager = ConnectionManager()
-
-# Helper function to get the data directory path
-def get_data_dir():
-    return os.path.join(os.path.dirname(__file__), 'data')
-
-# Define a request model for start_crawl
-class CrawlRequest(BaseModel):
-    headless: bool = False # Default to non-headless mode
-
-# Define a simple region mapping (can be expanded)
-REGION_MAP = {
-    "צפון": ["קריון", "גרנד קניון", "חיפה", "קיסריה", "חדרה"],
-    "שרון": ["רעננה", "כפר סבא", "נתניה", "הוד השרון", "הרצליה", "שבעת הכוכבים"],
-    "מרכז": ["תל אביב", "פתח תקווה", "רמת גן", "גבעתיים", "ראש העין", "עזריאלי", "דיזנגוף", "גבעת שמואל", "ראשון לציון", "קריית אונו", "קרית אונו"],
-    "שפלה": ["נס ציונה", "רחובות", "לוד", "אביבים"],
-    "ירושלים והסביבה": ["ירושלים", "מבשרת ציון", "מודיעין", "פמלי מבשרת"],
-    "דרום": ["אשדוד", "באר שבע", "אשקלון"], 
-}
-
-def get_club_region(club_name: Optional[str]) -> str:
-    """Determines the region based on the club name."""
-    if not club_name:
-        return "לא ידוע"
-    for region, keywords in REGION_MAP.items():
-        if any(keyword in club_name for keyword in keywords):
-            return region
-    logging.warning(f"Club '{club_name}' did not match any defined region. Assigning 'לא ידוע'.")
-    return "לא ידוע"
-
+# Add a root endpoint to serve the frontend
 @app.get("/")
-def read_root():
-    return {"status": "Holmes Place Schedule API is running"}
-
-@app.options("/ws")
-async def websocket_options(request: Request, response: Response):
-    """Handle preflight requests for WebSocket connections"""
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return {}
-
-@app.get("/latest-data")
-def get_latest_data():
-    """Get the latest crawled data"""
-    data_dir = get_data_dir()
-    
-    # Get the latest successful crawl
-    latest_file = get_latest_successful_crawl_file()
-    if not latest_file:
-        return {"filename": None, "count": 0, "data": []}
-    
-    # Read and return the data
-    data = []
-    with open(latest_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            data.append(json.loads(line))
-    
-    return {"filename": os.path.basename(latest_file), "count": len(data), "data": data}
-
-def get_latest_successful_crawl_file():
-    """Get the latest successful (complete) crawl file"""
-    data_dir = get_data_dir()
-
-    # Patterns for JSONL files (old timestamped and new plain)
-    class_pattern = os.path.join(data_dir, "holmes_place_schedule*.jsonl")
-    club_pattern = os.path.join(data_dir, "holmes_clubs*.jsonl")
-    class_files = glob.glob(class_pattern)
-    club_files = glob.glob(club_pattern)
-    all_files = class_files + club_files
-
-    if not all_files:
-        logging.info("No JSONL files found in data directory")
-        return None
-
-    # Sort all JSONL files by creation time descending
-    sorted_all = sorted(all_files, key=os.path.getctime, reverse=True)
-    logging.info(f"Available JSONL files (newest first): {[os.path.basename(f) for f in sorted_all]}")
-
-    # Prefer club-format files if present
-    sorted_club = sorted(club_files, key=os.path.getctime, reverse=True)
-    if sorted_club:
-        latest = sorted_club[0]
-        logging.info(f"Using newest club format file: {os.path.basename(latest)}")
-        return latest
-
-    # Otherwise, candidate is the most recent file
-    latest = sorted_all[0]
-
-    # Check status file to determine usability
-    status_file = os.path.join(data_dir, "last_crawl_status.json")
-    should_use_latest = True
-    if os.path.exists(status_file):
-        try:
-            with open(status_file, 'r', encoding='utf-8') as sf:
-                status_data = json.load(sf)
-            # New format status file
-            if isinstance(status_data, dict) and "crawl_results" in status_data:
-                was_stopped = status_data.get("was_stopped_early", False)
-                critical_error = status_data.get("critical_error_occurred", False)
-                results = status_data.get("crawl_results", {})
-                logging.info(f"Status file details: was_stopped_early={was_stopped}, critical_error_occurred={critical_error}, clubs_count={len(results)}")
-                if (was_stopped or critical_error) and not any(d.get('status') == 'success' for d in results.values()):
-                    should_use_latest = False
-                    logging.info("Latest crawl is NOT usable - problematic run with no successful clubs")
-            else:
-                # Old format: direct club statuses
-                if not any(isinstance(v, dict) and v.get('status') == 'success' for v in status_data.values()):
-                    should_use_latest = False
-                    logging.info("Latest crawl is NOT usable - old status format with no successful clubs")
-        except Exception as e:
-            logging.error(f"Error reading last crawl status: {e}")
-    else:
-        logging.info("No status file found, defaulting to latest file")
-
-    if should_use_latest:
-        logging.info(f"Using most recent file: {os.path.basename(latest)}")
-        return latest
-
-    # If not usable and multiple files exist, pick previous
-    if len(sorted_all) > 1:
-        prev = sorted_all[1]
-        logging.info(f"Using previous file due to problematic latest: {os.path.basename(prev)}")
-        return prev
-
-    # Fallback: use latest anyway
-    logging.info(f"Only one file exists; using it despite potential issues: {os.path.basename(latest)}")
-    return latest
-
-def _read_latest_jsonl():
-    """Helper function to read all data from the latest successful JSONL file."""
-    latest_file = get_latest_successful_crawl_file()
-    if not latest_file:
-        return []
-        
-    data = []
-    try:
-        is_club_format = "holmes_clubs_" in os.path.basename(latest_file)
-        
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    line_data = json.loads(line)
-                    
-                    # If this is a club format file, extract the classes
-                    if is_club_format:
-                        # Each line is a club with 'classes' field containing class data
-                        if 'classes' in line_data and isinstance(line_data['classes'], list):
-                            # Extract all classes from this club
-                            for class_data in line_data['classes']:
-                                # Add club name if missing in class data
-                                if 'club' not in class_data and 'club_name' in line_data:
-                                    class_data['club'] = line_data['club_name']
-                                # Add area/region if missing
-                                if 'region' not in class_data and 'area' in line_data:
-                                    class_data['region'] = line_data['area']
-                                data.append(class_data)
-                    else:
-                        # Old format - each line is a single class
-                        data.append(line_data)
-                        
-                except json.JSONDecodeError as decode_err:
-                     logging.warning(f"Skipping malformed line in {latest_file}: {decode_err}")
-    except FileNotFoundError:
-        logging.error(f"Latest file {latest_file} not found during read.")
-        return []
-    except Exception as read_err:
-         logging.error(f"Error reading {latest_file}: {read_err}")
-         return []
-    return data
-
-@app.get("/clubs")
-def get_clubs():
-    """Get list of clubs grouped by region from the latest crawl data with status information."""
-    all_data = _read_latest_jsonl()
-    status_filename = os.path.join(get_data_dir(), "last_crawl_status.json")
-    
-    # Get unique club names
-    club_names = set(item.get("club") for item in all_data if item.get("club"))
-    
-    # Get status information if available
-    club_statuses = {}
-    club_to_opening_hours = {}
-    short_club_names = {}
-    
-    # Check if we're using a club format file by looking at the latest file
-    latest_file = get_latest_successful_crawl_file()
-    is_club_format = latest_file and "holmes_clubs_" in os.path.basename(latest_file)
-    
-    if is_club_format:
-        # Read opening hours directly from the club format file
-        try:
-            with open(latest_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        club_data = json.loads(line)
-                        if 'club_name' in club_data and 'opening_hours' in club_data:
-                            club_to_opening_hours[club_data['club_name']] = club_data['opening_hours']
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logging.error(f"Error reading opening hours from club file: {e}")
-    
-    # Also check status file as a fallback for older files
-    if os.path.exists(status_filename):
-        try:
-            with open(status_filename, 'r', encoding='utf-8') as f:
-                status_data = json.load(f)
-                
-                # Handle both old and new status file formats
-                if isinstance(status_data, dict) and "crawl_results" in status_data:
-                    # New format
-                    club_statuses = status_data.get("crawl_results", {})
-                    # Get opening hours if not already loaded from club format
-                    if not club_to_opening_hours:
-                        club_to_opening_hours = status_data.get("club_to_opening_hours", {})
-                    # Get short club names if available
-                    short_club_names = status_data.get("short_club_names", {})
-                else:
-                    # Old format - direct club statuses
-                    club_statuses = status_data
-        except Exception as e:
-            logging.error(f"Error reading club statuses: {e}")
-    
-    # Group clubs by region
-    clubs_by_region = {}
-    for club_name in club_names:
-        region = get_club_region(club_name)
-        if region not in clubs_by_region:
-            clubs_by_region[region] = []
-            
-        # Get short name or create one if not available
-        short_name = short_club_names.get(club_name, club_name)
-        if not short_name or short_name == club_name:
-            # Create a short name by removing common prefixes
-            short_name = club_name
-            if "הולמס פלייס" in short_name:
-                short_name = short_name.replace("הולמס פלייס", "").strip()
-        
-        # Create club entry with status and opening hours
-        club_entry = {
-            "name": club_name,
-            "short_name": short_name,
-            "region": region,
-            "status": club_statuses.get(club_name, {}).get("status", "unknown") if isinstance(club_statuses.get(club_name), dict) else club_statuses.get(club_name, "unknown"),
-            "opening_hours": club_to_opening_hours.get(club_name, {})
-        }
-        
-        clubs_by_region[region].append(club_entry)
-    
-    # Add any clubs from status data that are not in the data file
-    for club_name, club_data in club_statuses.items():
-        if club_name not in club_names:
-            region = get_club_region(club_name)
-            if region not in clubs_by_region:
-                clubs_by_region[region] = []
-                
-            # Get or create short name
-            short_name = short_club_names.get(club_name, club_name)
-            if not short_name or short_name == club_name:
-                # Create a short name by removing common prefixes
-                short_name = club_name
-                if "הולמס פלייס" in short_name:
-                    short_name = short_name.replace("הולמס פלייס", "").strip()
-            
-            status = club_data.get("status", "unknown") if isinstance(club_data, dict) else club_data
-            
-            clubs_by_region[region].append({
-                "name": club_name,
-                "short_name": short_name,
-                "region": region,
-                "status": status,
-                "opening_hours": club_to_opening_hours.get(club_name, {})
-            })
-    
-    # Sort clubs alphabetically within each region
-    for region in clubs_by_region:
-        clubs_by_region[region].sort(key=lambda x: x["name"])
-    
-    # Convert to list format for easier frontend consumption
-    result = []
-    for region, clubs in clubs_by_region.items():
-        result.append({
-            "region": region,
-            "clubs": clubs
-        })
-    
-    # Sort regions by predefined order
-    region_order = ["מרכז", "שרון", "שפלה", "ירושלים והסביבה", "דרום", "צפון", "לא ידוע"]
-    result.sort(key=lambda x: region_order.index(x["region"]) if x["region"] in region_order else len(region_order))
-    
-    return result
-
-@app.get("/clubs-with-status")
-def get_clubs_with_status():
-    """Get list of all clubs with their crawl status from the last crawl status file."""
-    status_filename = os.path.join(get_data_dir(), "last_crawl_status.json")
-    
-    try:
-        if os.path.exists(status_filename):
-            with open(status_filename, 'r', encoding='utf-8') as f:
-                status_data = json.load(f)
-                
-                # Handle both old and new status file formats
-                last_status = {}
-                crawl_metadata = {}
-                
-                if isinstance(status_data, dict) and "crawl_results" in status_data:
-                    # New format
-                    last_status = status_data.get("crawl_results", {})
-                    # Extract metadata
-                    crawl_metadata = {
-                        "was_stopped_early": status_data.get("was_stopped_early", False),
-                        "critical_error_occurred": status_data.get("critical_error_occurred", False),
-                        "timestamp": status_data.get("timestamp")
-                    }
-                else:
-                    # Old format - direct club statuses
-                    last_status = status_data
-                
-                clubs_with_status = []
-                
-                for club_name, result in last_status.items():
-                    # Add region information for each club
-                    region = get_club_region(club_name)
-                    clubs_with_status.append({
-                        "name": club_name,
-                        "url": result.get("url", ""),
-                        "status": result.get("status", "unknown"),
-                        "region": region
-                    })
-                
-                # Sort clubs by name
-                clubs_with_status.sort(key=lambda c: c["name"])
-                
-                # Return clubs with metadata about the crawl
-                response = {"clubs": clubs_with_status}
-                if crawl_metadata:
-                    response["crawl_status"] = crawl_metadata  # Rename from crawl_metadata to crawl_status
-                
-                return response
-        
-        return {"clubs": [], "error": "Last crawl status file not found"}
-            
-    except Exception as e:
-        logging.error(f"Error reading last crawl status: {e}")
-        return {"clubs": [], "error": str(e)}
-
-@app.get("/class-names")
-def get_class_names():
-    """Get list of unique class names from the latest crawl data."""
-    all_data = _read_latest_jsonl()
-    class_names = set(item.get("name") for item in all_data if item.get("name"))
-    return {"class_names": sorted(list(class_names))}
-
-@app.get("/instructors")
-def get_instructors():
-    """Get list of unique instructor names from the latest crawl data."""
-    all_data = _read_latest_jsonl()
-    instructors = set(item.get("instructor") for item in all_data if item.get("instructor"))
-    return {"instructors": sorted(list(instructors))}
-
-@app.get("/classes")
-def get_classes(
-    date: Optional[str] = None,
-    # Allow multiple selections for these filters
-    class_name: Optional[List[str]] = Query(None), 
-    club: Optional[List[str]] = Query(None),
-    instructor: Optional[List[str]] = Query(None),
-    day_name_hebrew: Optional[List[str]] = Query(None) 
-):
-    """Get filtered class data, now including region and supporting multi-select."""
-    logging.info(f"--- Received /classes request with filters ---")
-    logging.info(f"  Date: {date}")
-    logging.info(f"  Class Names: {class_name}") # Log list
-    logging.info(f"  Clubs: {club}")             # Log list
-    logging.info(f"  Instructors: {instructor}") # Log list
-    logging.info(f"  Day Names (Hebrew): {day_name_hebrew}")
-    
-    all_classes = _read_latest_jsonl() 
-    if not all_classes:
-        logging.info("  No data found in JSONL file.")
-        return {
-            "count": 0,
-            "classes": [],
-            "regions_found": [],
-            "opening_hours": {}
-        }
-    logging.info(f"  Read {len(all_classes)} classes from file.")
-    
-    # Get opening hours from the latest crawl file
-    opening_hours = {}
-    latest_file = get_latest_successful_crawl_file()
-    if latest_file and "holmes_clubs_" in os.path.basename(latest_file):
-        try:
-            with open(latest_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        club_data = json.loads(line)
-                        if 'club_name' in club_data and 'opening_hours' in club_data:
-                            opening_hours[club_data['club_name']] = club_data['opening_hours']
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logging.error(f"Error reading opening hours from club file: {e}")
-    
-    # Apply filters
-    filtered_classes = all_classes
-    
-    # --- Apply List Filters --- 
-    if date:
-        filtered_classes = [c for c in filtered_classes if c.get("day") == date]
-        
-    if day_name_hebrew:
-        days_to_filter = set(day_name_hebrew) 
-        logging.info(f"  Filtering by Hebrew days: {days_to_filter}")
-        original_count = len(filtered_classes)
-        filtered_classes = [c for c in filtered_classes if c.get("day_name_hebrew") in days_to_filter]
-        logging.info(f"  Filtered by day: {original_count} -> {len(filtered_classes)} classes")
-    else:
-        logging.info("  No Hebrew day filter applied.")
-
-    if class_name:
-        class_names_to_filter = set(cn.lower() for cn in class_name) # Lowercase for comparison
-        logging.info(f"  Filtering by class names: {class_names_to_filter}")
-        original_count = len(filtered_classes)
-        # Check if the class name contains any of the filter terms (case-insensitive)
-        filtered_classes = [
-            c for c in filtered_classes 
-            if any(filter_name in c.get("name", "").lower() for filter_name in class_names_to_filter)
-        ]
-        logging.info(f"  Filtered by class_name: {original_count} -> {len(filtered_classes)} classes")
-    
-    if club:
-        clubs_to_filter = set(c.lower() for c in club) # Lowercase for comparison
-        logging.info(f"  Filtering by clubs: {clubs_to_filter}")
-        original_count = len(filtered_classes)
-        # Check if the club name contains any of the filter terms (case-insensitive)
-        # Or use exact match: if c.get("club", "").lower() in clubs_to_filter
-        filtered_classes = [
-            c for c in filtered_classes
-            if any(filter_club in c.get("club", "").lower() for filter_club in clubs_to_filter)
-        ]
-        logging.info(f"  Filtered by club: {original_count} -> {len(filtered_classes)} classes")
-    
-    if instructor:
-        instructors_to_filter = set(i.lower() for i in instructor) # Lowercase
-        logging.info(f"  Filtering by instructors: {instructors_to_filter}")
-        original_count = len(filtered_classes)
-        # Check if the instructor name contains any of the filter terms (case-insensitive)
-        # Or use exact match: if c.get("instructor", "").lower() in instructors_to_filter
-        filtered_classes = [
-            c for c in filtered_classes 
-            if c.get("instructor") and any(filter_inst in c.get("instructor", "").lower() for filter_inst in instructors_to_filter)
-        ]
-        logging.info(f"  Filtered by instructor: {original_count} -> {len(filtered_classes)} classes")
-    
-    # Add region to each filtered class and get unique regions found
-    regions_found = set()
-    processed_classes = []
-    for c in filtered_classes:
-        region = get_club_region(c.get("club"))
-        c['region'] = region
-        regions_found.add(region)
-        processed_classes.append(c)
-
-    # Define the NEW sort order for regions
-    region_sort_order = {
-        "מרכז": 1,
-        "שרון": 2,
-        "שפלה": 3,
-        "ירושלים והסביבה": 4,
-        "דרום": 5,
-        "צפון": 6,
-        "לא ידוע": 7 # Keep last
-    }
-    sorted_regions = sorted(list(regions_found), key=lambda r: region_sort_order.get(r, 99))
-
-    logging.info(f"--- Returning {len(processed_classes)} classes, regions sorted: {sorted_regions} ---") # Log sorted regions
-    return {
-        "count": len(processed_classes),
-        "classes": processed_classes, 
-        "regions_found": sorted_regions,
-        "opening_hours": opening_hours
-    }
-
-@app.post("/start-crawl")
-async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """Start the crawler in the background, optionally headless."""
-    crawler_stop_event.clear()
-    logging.info("Cleared crawler stop event. Starting FULL crawl.")
-    
-    async def run_crawler():
-        crawler = HolmesPlaceCrawler(
-            websocket_manager=manager, 
-            headless=request.headless,
-            stop_event=crawler_stop_event,
-            output_dir=get_data_dir()
-            # clubs_to_process is None for a full crawl
-        )
-        await crawler.start()
-    
-    background_tasks.add_task(lambda: asyncio.run(run_crawler()))
-    return {"status": f"Crawler started in background ({'headless' if request.headless else 'headed'})."}
-
-@app.post("/retry-failed-crawl")
-async def retry_failed_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """Reads the last status file and restarts the crawler only for failed clubs."""
-    status_filename = os.path.join(get_data_dir(), "last_crawl_status.json")
-    failed_clubs_to_retry = []
-    
-    try:
-        if os.path.exists(status_filename):
-            with open(status_filename, 'r', encoding='utf-8') as f:
-                last_status = json.load(f)
-                for club_name, result in last_status.items():
-                    if result.get("status") == "failed":
-                        failed_clubs_to_retry.append({"name": club_name, "url": result.get("url")})
-        
-        if not failed_clubs_to_retry:
-            logging.info("Retry request received, but no failed clubs found in last status.")
-            return {"status": "No failed clubs found in the last crawl status to retry."}
-            
-        logging.info(f"Found {len(failed_clubs_to_retry)} failed clubs to retry: {[c['name'] for c in failed_clubs_to_retry]}")
-        
-        # Clear the stop event before starting the retry crawl
-        crawler_stop_event.clear()
-        logging.info("Cleared crawler stop event for retry crawl.")
-        
-        async def run_retry_crawler():
-            crawler = HolmesPlaceCrawler(
-                websocket_manager=manager, 
-                headless=request.headless, # Use headless preference from request
-                stop_event=crawler_stop_event,
-                output_dir=get_data_dir(),
-                clubs_to_process=failed_clubs_to_retry # Pass the list of failed clubs
-            )
-            await crawler.start()
-        
-        background_tasks.add_task(lambda: asyncio.run(run_retry_crawler()))
-        return {"status": f"Retry crawl started in background for {len(failed_clubs_to_retry)} failed clubs."}
-
-    except FileNotFoundError:
-        logging.error("Retry request failed: last_crawl_status.json not found.")
-        return {"status": "Error: Cannot retry, last crawl status file not found."}
-    except json.JSONDecodeError:
-        logging.error("Retry request failed: Error reading last_crawl_status.json.")
-        return {"status": "Error: Cannot retry, error reading last crawl status file."}
-    except Exception as e:
-        logging.error(f"Retry request failed: Unexpected error: {e}", exc_info=True)
-        return {"status": f"Error: Unexpected error initiating retry crawl: {e}"}
-
-@app.post("/stop-crawl")
-async def stop_crawl():
-    """Signals the running crawler to stop."""
-    if not crawler_stop_event.is_set():
-        crawler_stop_event.set()
-        logging.info("Crawler stop event set.")
-        return {"status": "Stop signal sent to crawler."}
-    else:
-        logging.info("Crawler stop event was already set.")
-        return {"status": "Crawler stop signal was already sent."}
+async def serve_frontend():
+    return FileResponse(os.path.join(static_dir, "index.html"))
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    client_host = websocket.client.host
-    logging.info(f"New WebSocket connection attempt from {client_host}")
+    logger.info("New WebSocket connection request received")
+    await websocket_manager.connect(websocket)
     
-    await manager.connect(websocket)
-    logging.info(f"WebSocket connection successfully accepted for {client_host}")
+    # Use a variable to track connection state
+    is_connected = True
     
     try:
-        # Send initial connection message - confirms acceptance
-        await websocket.send_json({
-            "type": "connection_established", 
-            "message": "Connected to crawler status updates",
-            "timestamp": datetime.now().isoformat()
-        })
-        logging.info(f"Sent connection_established message to {client_host}")
-        
-        # Keep the connection open and listen for messages
-        while True:
+        while is_connected:
+            # Keep connection alive and handle messages
             try:
-                # Wait for messages from the client
-                data = await websocket.receive_text() # Use receive_text or receive_json based on expected format
-                logging.info(f"Received message from {client_host}: {data}")
+                # Use a timeout to prevent blocking indefinitely
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                logger.info(f"Received WebSocket message: {data}")
                 
+                # Attempt to parse JSON message
                 try:
-                    message_data = json.loads(data)
-                    if isinstance(message_data, dict) and message_data.get("action") == "get_data_info":
-                        logging.info(f"Processing get_data_info request from {client_host}")
-                        info = get_data_info() # Call the existing function
-                        await websocket.send_json({
-                            "type": "data_info",
-                            "data": info,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        logging.info(f"Sent data_info response to {client_host}")
-                    elif isinstance(message_data, dict) and message_data.get("action") == "get_crawl_status":
-                        logging.info(f"Processing get_crawl_status request from {client_host}")
-                        info = await get_crawl_status(websocket) # Call the new function
-                        await websocket.send_json({
-                            "type": "crawl_status",
-                            "data": info,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        logging.info(f"Sent crawl_status response to {client_host}")
-                    elif isinstance(message_data, dict) and message_data.get("action") == "start_crawl":
-                        logging.info(f"Processing start_crawl request from {client_host}")
-                        # Extract headless parameter if provided, default to False
-                        headless = message_data.get("headless", False)
+                    json_data = json.loads(data)
+                    if isinstance(json_data, dict) and "action" in json_data:
+                        action = json_data["action"]
+                        logger.info(f"Processing WebSocket action: {action}")
                         
-                        # Start the crawler using the existing API endpoint
-                        crawler_stop_event.clear()
-                        logging.info(f"WebSocket: Cleared crawler stop event. Starting FULL crawl with headless={headless}")
-                        
-                        async def run_ws_crawler():
-                            try:
-                                crawler = HolmesPlaceCrawler(
-                                    websocket_manager=manager, 
-                                    headless=headless,
-                                    stop_event=crawler_stop_event,
-                                    output_dir=get_data_dir()
-                                )
-                                await crawler.start()
-                            except Exception as crawl_err:
-                                logging.error(f"Error in WebSocket crawler: {crawl_err}", exc_info=True)
-                                await websocket.send_json({
-                                    "type": "crawl_error",
-                                    "message": f"Crawler error: {str(crawl_err)}",
-                                    "timestamp": datetime.now().isoformat()
-                                })
-                        
-                        # Start the crawler in the background
-                        asyncio.create_task(run_ws_crawler())
-                        
-                        # Send confirmation response to client
-                        await websocket.send_json({
-                            "type": "crawl_started",
-                            "message": f"Crawler started in {'headless' if headless else 'headed'} mode",
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        logging.info(f"Sent crawl_started response to {client_host}")
-                    elif isinstance(message_data, dict) and message_data.get("action") == "stop_crawl":
-                        logging.info(f"Processing stop_crawl request from {client_host}")
-                        if not crawler_stop_event.is_set():
-                            crawler_stop_event.set()
-                            logging.info("WebSocket: Crawler stop event set.")
-                            await websocket.send_json({
-                                "type": "crawl_stopped",
-                                "message": "Stop signal sent to crawler",
+                        if action == "get_status":
+                            status_data = {
+                                "type": "status",
+                                "message": "Current crawler status",
+                                "data": websocket_manager.get_status(),
                                 "timestamp": datetime.now().isoformat()
-                            })
-                        else:
-                            logging.info("WebSocket: Crawler stop event was already set.")
-                            await websocket.send_json({
-                                "type": "crawl_stopped",
-                                "message": "Crawler was already stopping",
-                                "timestamp": datetime.now().isoformat()
-                            })
-                    else:
-                        # Handle other message types or ignore
-                        logging.warning(f"Received unknown message format or action from {client_host}: {data}")
-                        # Send an error response for unknown actions
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Unknown action: {message_data.get('action', 'none')}",
-                            "timestamp": datetime.now().isoformat()
-                        })
-                except json.JSONDecodeError:
-                    logging.error(f"Failed to decode JSON message from {client_host}: {data}")
-                    # Optional: Send an error message back
-                    # await websocket.send_text("Error: Invalid JSON format")
-                except Exception as msg_proc_err:
-                    logging.error(f"Error processing message from {client_host}: {msg_proc_err}")
-                    # Optional: Send an error message back
-                    # await websocket.send_text(f"Error processing message: {msg_proc_err}")
-                
-            except WebSocketDisconnect:
-                logging.info(f"WebSocket client {client_host} disconnected gracefully.")
-                break # Exit the loop on disconnect
-            except Exception as loop_err:
-                # Log unexpected errors within the loop but try to keep connection alive if possible
-                logging.error(f"Unexpected error in WebSocket loop for {client_host}: {loop_err}\n{traceback.format_exc()}")
-                # Depending on the error, you might want to break or continue
-                # For robustness, we'll break here to avoid potential infinite error loops
-                break
-                
-    except Exception as e:
-        # Catch errors during the initial connection phase or outside the main loop
-        logging.error(f"Unhandled error in WebSocket endpoint for {client_host}: {e}\n{traceback.format_exc()}")
-    finally:
-        # Ensure disconnection logic runs regardless of how the connection ends
-        manager.disconnect(websocket)
-        logging.info(f"WebSocket connection cleaned up for {client_host}")
-
-@app.get("/crawl-status")
-def get_crawl_status_http():
-    """HTTP endpoint to get current crawl status (for frontend)"""
-    return _get_crawl_status_impl()
-
-@app.websocket("/ws/crawl-status")
-async def get_crawl_status_ws(websocket: WebSocket):
-    """WebSocket endpoint to get the current crawl status."""
-    # Accept the connection
-    await websocket.accept()
-    try:
-        # Send initial status snapshot
-        crawl_data = _get_crawl_status_impl()
-        await websocket.send_json({
-            "type": "crawl_status",
-            "data": crawl_data,
-            "timestamp": datetime.now().isoformat()
-        })
-        # Keep connection open until client disconnects
-        while True:
-            try:
-                # Wait for any message or disconnection
-                await websocket.receive_text()
-            except WebSocketDisconnect:
-                logging.info("get_crawl_status_ws: client disconnected")
-                break
-    except Exception as e:
-        logging.error(f"Error in get_crawl_status_ws: {e}")
-    finally:
-        # Close the connection
-        await websocket.close()
-
-@app.get("/data-info")
-def get_data_info():
-    """Get information about data freshness and available clubs (deprecated, use /crawl-status instead)."""
-    logging.warning("The /data-info endpoint is deprecated. Please use /crawl-status instead.")
-    return _get_crawl_status_impl()
-
-def _get_crawl_status_impl():
-    """Implementation of the crawl status endpoint functionality."""
-    data_dir = get_data_dir()
-    jsonl_files = glob.glob(os.path.join(data_dir, "*.jsonl"))
-    status_filename = os.path.join(data_dir, "last_crawl_status.json")
-    
-    # Initialize default response
-    response = {
-        "has_data": False,
-        "latest_file": None,
-        "latest_file_full_path": None,
-        "latest_crawl_date": None,
-        "days_since_crawl": None,
-        "is_stale": True,  # Default to stale if no data
-        "clubs": [], # Will contain {name, status, url, region}
-        "is_complete_crawl": False  # Default to false
-    }
-    
-    # Get the latest successful crawl file
-    latest_file = get_latest_successful_crawl_file()
-    
-    # Check if we have any data files for freshness info
-    if latest_file:
-        try:
-            file_timestamp = os.path.getctime(latest_file)
-            file_date = datetime.fromtimestamp(file_timestamp)
-            days_since_crawl = (datetime.now() - file_date).days
-            
-            # Default to treating the crawl as complete unless proven otherwise
-            is_complete_crawl = True
-            
-            # Check the status file to determine if there were any issues with the crawl
-            if os.path.exists(status_filename):
-                try:
-                    with open(status_filename, 'r', encoding='utf-8') as f:
-                        status_data = json.load(f)
-                        
-                        if isinstance(status_data, dict) and "crawl_results" in status_data:
-                            # New format - check if the crawl was explicitly marked as problematic
-                            was_stopped_early = status_data.get("was_stopped_early", False)
-                            critical_error_occurred = status_data.get("critical_error_occurred", False)
-                            crawl_results = status_data.get("crawl_results", {})
-                            
-                            # Mark as incomplete if it was explicitly stopped early or had critical errors
-                            # AND it doesn't have enough successful clubs
-                            if (was_stopped_early or critical_error_occurred):
-                                is_complete_crawl = False
-                except Exception as status_err:
-                    logging.error(f"Error checking crawl status: {status_err}")
-            
-            response.update({
-                "has_data": True,
-                "latest_file": os.path.basename(latest_file),
-                "latest_file_full_path": latest_file,
-                "latest_crawl_date": file_date.isoformat(),
-                "days_since_crawl": days_since_crawl,
-                "is_stale": days_since_crawl > 7,
-                "is_complete_crawl": is_complete_crawl
-            })
-            
-            # Add crawl metadata from the status file if available
-            if os.path.exists(status_filename):
-                try:
-                    with open(status_filename, 'r', encoding='utf-8') as f:
-                        status_data = json.load(f)
-                        
-                        if isinstance(status_data, dict) and "crawl_results" in status_data:
-                            # New format - extract metadata
-                            crawl_metadata = {
-                                "was_stopped_early": status_data.get("was_stopped_early", False),
-                                "critical_error_occurred": status_data.get("critical_error_occurred", False),
-                                "timestamp": status_data.get("timestamp")
                             }
-                            response["crawl_metadata"] = crawl_metadata
-                            
-                            # Add summary statistics
-                            if "crawl_results" in status_data:
-                                clubs_data = status_data["crawl_results"]
-                                success_count = sum(1 for _, data in clubs_data.items() if data.get("status") == "success")
-                                failed_count = sum(1 for _, data in clubs_data.items() if data.get("status") == "failed")
-                                response["success_count"] = success_count
-                                response["failed_count"] = failed_count
-                                response["total_processed"] = len(clubs_data)
-                                
-                except Exception as metadata_err:
-                    logging.error(f"Error reading crawl metadata: {metadata_err}")
+                            await websocket.send_json(status_data)
+                            logger.info("Sent status response to client")
+                except json.JSONDecodeError:
+                    logger.warning(f"Received non-JSON message: {data}")
+                    # Not an error, just continue
                     
-        except Exception as e:
-            logging.error(f"Error getting file info: {e}")
-    
-    # --- Get clubs with region --- 
-    clubs_list_with_region = []
-    processed_club_names = set()
-    club_to_region = {}  # Initialize here, outside the if block
-
-    # STEP 1: First, get all clubs from the latest data file
-    if response["has_data"]:
-        all_data = _read_latest_jsonl()
-        # club_to_region = {}  <-- Remove initialization from here
-        
-        # Extract all unique clubs from the data
-        for item in all_data:
-            if club_name := item.get("club"):
-                if club_name not in club_to_region:
-                    region = get_club_region(club_name)
-                    club_to_region[club_name] = region
-        
-        logging.info(f"Found {len(club_to_region)} unique clubs in the data file")
-    
-    # STEP 2: Get status info from the status file
-    status_info = {}
-    if os.path.exists(status_filename):
-        try:
-            with open(status_filename, 'r', encoding='utf-8') as f:
-                status_data = json.load(f)
+            except asyncio.TimeoutError:
+                # Just a timeout, not an error - send a ping to keep connection alive
+                try:
+                    await websocket.send_json({
+                        "type": "ping",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                except Exception:
+                    # If we can't send ping, assume connection is closed
+                    logger.info("WebSocket ping failed, assuming client disconnected")
+                    is_connected = False
+                    
+            except Exception as msg_error:
+                # Any other error means we should stop the loop
+                logger.error(f"Error processing WebSocket message: {str(msg_error)}")
+                is_connected = False
                 
-                last_status = {}
-                if isinstance(status_data, dict) and "crawl_results" in status_data:
-                    # New format
-                    last_status = status_data.get("crawl_results", {})
-                else:
-                    # Old format - direct club statuses
-                    last_status = status_data
-                
-                # Store all status info
-                for club_name, result in last_status.items():
-                    status_info[club_name] = {
-                        "url": result.get("url", ""),
-                        "status": result.get("status", "unknown")
-                    }
-        except Exception as e:
-            logging.error(f"Error reading clubs from status file: {e}")
-    
-    # STEP 3: Combine data and status info
-    # -- ADD LOGGING HERE --
-    logging.info(f"[_get_crawl_status_impl] Before combining: Type of club_to_region: {type(club_to_region)}, Value: {club_to_region}")
-    # ---------------------
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {str(e)}")
+    finally:
+        logger.info("WebSocket client disconnecting")
+        websocket_manager.disconnect(websocket)
 
-    # First, add all clubs from the data file (regardless of status)
-    for club_name, region in club_to_region.items():
-        status = "unknown"
-        url = ""
-        
-        # Add status info if available
-        if club_name in status_info:
-            status = status_info[club_name]["status"]
-            url = status_info[club_name]["url"]
-            
-        clubs_list_with_region.append({
-            "name": club_name,
-            "url": url,
-            "status": status,
-            "region": region
-        })
-        processed_club_names.add(club_name)
-    
-    # Then, add any additional clubs from the status file that weren't in the data
-    if status_info:
-        for club_name, info in status_info.items():
-            if club_name not in processed_club_names:
-                region = get_club_region(club_name)
-                clubs_list_with_region.append({
-                    "name": club_name,
-                    "url": info["url"],
-                    "status": info["status"],
-                    "region": region
-                })
-                processed_club_names.add(club_name)
+@app.get("/api/status")
+async def get_status():
+    """Get current crawl status."""
+    return websocket_manager.get_status()
 
-    # Sort the final list by name and add to response
-    clubs_list_with_region.sort(key=lambda c: c["name"])
-    response["clubs"] = clubs_list_with_region
-    # Fallback: mark has_data True if clubs list is non-empty
-    if response.get("clubs"):
-        response["has_data"] = True
-    # ---------------------------
-    
-    logging.info(f"Returning crawl status with {len(response['clubs'])} clubs.")
-    return response
-
-@app.get("/bypass-completeness-check")
-def bypass_completeness_check():
-    """Temporarily use the latest data file regardless of completeness status.
-    For debugging purposes only."""
-    data_dir = get_data_dir()
-    
-    # Look for both old and new format files
-    class_jsonl_files = glob.glob(os.path.join(data_dir, "holmes_place_schedule_*.jsonl"))
-    club_jsonl_files = glob.glob(os.path.join(data_dir, "holmes_clubs_*.jsonl"))
-    
-    all_jsonl_files = class_jsonl_files + club_jsonl_files
-    
-    if not all_jsonl_files:
-        return {"success": False, "message": "No data files found"}
+@app.post("/api/start-crawl")
+async def start_crawl():
+    """Start the crawling process."""
+    if websocket_manager.status["is_running"]:
+        raise HTTPException(status_code=400, detail="Crawl already in progress")
     
     try:
-        # Simply use the most recent file
-        latest_file = max(all_jsonl_files, key=os.path.getctime)
-        is_club_format = "holmes_clubs_" in os.path.basename(latest_file)
-        logging.info(f"BYPASS: Using most recent file regardless of completeness: {os.path.basename(latest_file)} (club format: {is_club_format})")
+        # Get the latest clubs data to determine which clubs to crawl
+        logger.info("Looking for latest JSONL file...")
+        holmes_file = get_latest_jsonl_file()
+        if not holmes_file:
+            logger.error("No JSONL file found in data directory")
+            raise HTTPException(status_code=404, detail="No clubs data available")
         
-        # Read the data
-        data = []
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    line_data = json.loads(line)
+        logger.info(f"Found holmes.jsonl file: {holmes_file}")
+        logger.info("Reading clubs data...")
+        data = read_jsonl_file(holmes_file)
+        if not data:
+            logger.error("No valid data found in JSONL file")
+            raise HTTPException(status_code=404, detail="No valid data found in file")
+        
+        logger.info(f"Read {len(data)} entries from JSONL file")
+        clubs_to_process = []
+        
+        # Extract clubs from the data
+        for entry in data:
+            logger.debug(f"Processing entry: {entry}")
+            # If entry has a "clubs" key, process each club
+            if "clubs" in entry:
+                clubs_data = entry["clubs"]
+                for club_name, club_info in clubs_data.items():
+                    # Get URL if it exists
+                    url = club_info.get("url", "")
                     
-                    # If this is a club format file, extract the classes
-                    if is_club_format:
-                        # Each line is a club with 'classes' field containing class data
-                        if 'classes' in line_data and isinstance(line_data['classes'], list):
-                            # Extract all classes from this club
-                            for class_data in line_data['classes']:
-                                # Add club name if missing in class data
-                                if 'club' not in class_data and 'club_name' in line_data:
-                                    class_data['club'] = line_data['club_name']
-                                # Add area/region if missing
-                                if 'region' not in class_data and 'area' in line_data:
-                                    class_data['region'] = line_data['area']
-                                data.append(class_data)
-                    else:
-                        # Old format - each line is a single class
-                        data.append(line_data)
-                except json.JSONDecodeError as e:
-                    logging.warning(f"Skipping malformed line in {latest_file}: {e}")
+                    # Create club object with basic info
+                    clubs_to_process.append({
+                        "name": club_name,
+                        "url": url,  # May be empty, crawler will handle fetching
+                        "status": club_info.get("status", "unknown")
+                    })
+            # If entry is a direct club entry
+            elif "club_name" in entry:
+                club_name = entry["club_name"]
+                url = entry.get("url", "")
+                
+                clubs_to_process.append({
+                    "name": club_name,
+                    "url": url,  # May be empty, crawler will handle fetching
+                    "status": entry.get("status", "unknown")
+                })
         
-        # Return success info
+        if not clubs_to_process:
+            error_msg = "No clubs found in data"
+            logger.error(error_msg)
+            raise HTTPException(status_code=404, detail=error_msg)
+        
+        logger.info(f"Found {len(clubs_to_process)} clubs to process")
+        logger.debug(f"Clubs to process: {clubs_to_process}")
+        
+        # Update status to running
+        await websocket_manager.update_status(
+            is_running=True,
+            progress=0,
+            current_club=None,
+            error=None
+        )
+        
+        # Start crawler in background with clubs to process
+        asyncio.create_task(run_crawler(clubs_to_process))
+        
+        return {"message": "Crawl started successfully"}
+    except HTTPException as he:
+        # Log the error
+        logger.error(f"Error starting crawl: {he.detail}")
+        # Update status to error
+        await websocket_manager.update_status(
+            is_running=False,
+            error=he.detail
+        )
+        # Re-raise the HTTP exception
+        raise
+    except Exception as e:
+        # Log the error
+        error_msg = str(e) or "Unknown error occurred"
+        logger.error(f"Error starting crawl: {error_msg}")
+        # Update status to error
+        await websocket_manager.update_status(
+            is_running=False,
+            error=error_msg
+        )
+        # Return error response
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/api/data")
+async def get_data():
+    """Get the latest crawl data."""
+    try:
+        holmes_file = get_latest_jsonl_file()
+        if not holmes_file:
+            raise HTTPException(status_code=404, detail="No data available")
+        
+        data = read_jsonl_file(holmes_file)
+        days_since_crawl = calculate_days_since_crawl(holmes_file)
+        
         return {
-            "success": True, 
-            "message": "Using latest file regardless of completeness", 
-            "filename": os.path.basename(latest_file),
-            "count": len(data)
+            "data": data,
+            "days_since_crawl": days_since_crawl
         }
     except Exception as e:
-        logging.error(f"Error in bypass endpoint: {e}")
-        return {"success": False, "message": f"Error: {str(e)}"}
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/screenshots/{filename}")
-def get_screenshot(filename: str):
-    """Serve screenshot files from the screenshots directory."""
-    screenshots_dir = os.path.join(os.path.dirname(get_data_dir()), "screenshots")
-    return FileResponse(os.path.join(screenshots_dir, filename))
+@app.get("/api/instructors")
+async def get_instructors():
+    """Get list of all instructors from the latest data."""
+    try:
+        holmes_file = get_latest_jsonl_file()
+        if not holmes_file:
+            return {"instructors": []}
+        
+        data = read_jsonl_file(holmes_file)
+        instructors = set()
+        
+        for entry in data:
+            if "classes" in entry:
+                for class_data in entry["classes"]:
+                    if "instructor" in class_data and class_data["instructor"]:
+                        instructors.add(class_data["instructor"])
+        
+        return {"instructors": sorted(list(instructors))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/clubs")
+async def get_clubs():
+    """Get list of all clubs from the latest data."""
+    try:
+        # Try various possible locations for club data in order of preference
+        candidates = [
+            Path(__file__).resolve().parent.parent / "data" / "holmes.jsonl"
+        ]
+        
+        clubs_file = None
+        for candidate in candidates:
+            if candidate.exists():
+                clubs_file = candidate
+                break
+
+        if clubs_file is None:
+            # Hardcoded fallback - create an in-memory clubs structure
+            clubs_data = {
+                "clubs": {
+                    "הולמס פלייס תל אביב": {
+                        "url": "https://www.holmesplace.co.il/club-page-tel-aviv/",
+                        "status": "active",
+                        "area": "מרכז",
+                        "opening_hours": {
+                            "ראשון": "06:00-23:00",
+                            "שני": "06:00-23:00",
+                            "שלישי": "06:00-23:00",
+                            "רביעי": "06:00-23:00",
+                            "חמישי": "06:00-23:00",
+                            "שישי": "06:00-22:00",
+                            "שבת": "08:00-22:00"
+                        }
+                    },
+                    "הולמס פלייס הרצליה": {
+                        "url": "https://www.holmesplace.co.il/club-page-herzliya/",
+                        "status": "active",
+                        "area": "שרון",
+                        "opening_hours": {
+                            "ראשון": "06:00-23:00",
+                            "שני": "06:00-23:00",
+                            "שלישי": "06:00-23:00",
+                            "רביעי": "06:00-23:00",
+                            "חמישי": "06:00-23:00",
+                            "שישי": "06:00-22:00",
+                            "שבת": "08:00-22:00"
+                        }
+                    }
+                }
+            }
+            data = [clubs_data]
+            logger.info("Using hardcoded fallback clubs data")
+        else:
+            logger.info(f"Loading clubs from: {clubs_file}")
+            data = read_jsonl_file(str(clubs_file))
+        
+        logger.info(f"Read {len(data)} entries from clubs data source")
+        logger.info(f"First entry keys: {list(data[0].keys()) if data else []}")
+        if data and 'clubs' in data[0]:
+            logger.info(f"Club count in first entry: {len(data[0]['clubs'])}")
+            logger.info(f"First club name: {list(data[0]['clubs'].keys())[0] if data[0]['clubs'] else 'None'}")
+
+        clubs_by_region = {}  # Dictionary to group clubs by region
+        seen_clubs = set()  # Track unique clubs
+        
+        for entry in data:
+            if "clubs" in entry:
+                for club_name, club_data in entry["clubs"].items():
+                    # Skip if we've already seen this club
+                    if club_name in seen_clubs:
+                        continue
+                    seen_clubs.add(club_name)
+                    
+                    # Get the region/area for this club
+                    area = club_data.get("area", "")
+                    if not area:
+                        # Try to determine area from club name
+                        if "ירושלים" in club_name or "מבשרת" in club_name or "מודיעין" in club_name:
+                            area = "ירושלים והסביבה"
+                        elif "תל אביב" in club_name or "רמת גן" in club_name or "בני ברק" in club_name or "גבעתיים" in club_name or "דיזנגוף" in club_name or "עזריאלי" in club_name or "פתח תקווה" in club_name or "ראש העין" in club_name or "גבעת שמואל" in club_name or "קריית אונו" in club_name or ("ראשון לציון" in club_name and ("גו אקטיב" in club_name or "פרימיום" in club_name)):
+                            area = "מרכז"
+                        elif "חיפה" in club_name or "קריות" in club_name or "קריון" in club_name or "גרנד קניון" in club_name or "חדרה" in club_name or "קיסריה" in club_name:
+                            area = "צפון"
+                        elif "באר שבע" in club_name or "אשדוד" in club_name:
+                            area = "דרום"
+                        elif "נתניה" in club_name or "הרצליה" in club_name or "רעננה" in club_name or "כפר סבא" in club_name or "שבעת הכוכבים" in club_name:
+                            area = "שרון"
+                        elif "רחובות" in club_name or ("ראשון לציון" in club_name and not ("גו אקטיב" in club_name or "פרימיום" in club_name)) or "נס ציונה" in club_name or "לוד" in club_name:
+                            area = "שפלה"
+                        else:
+                            area = "מרכז"  # Default to מרכז
+                    
+                    # Get opening hours
+                    opening_hours = club_data.get("opening_hours", {})
+                    
+                    # Get URL if it exists, but don't try to generate one
+                    url = club_data.get("url", "")
+                    
+                    # Create club object
+                    club_obj = {
+                        "name": club_name,
+                        "short_name": club_name.replace("הולמס פלייס ", ""),
+                        "status": club_data.get("status", "unknown"),
+                        "url": url,
+                        "opening_hours": opening_hours
+                    }
+                    
+                    # Add to region group
+                    if area not in clubs_by_region:
+                        clubs_by_region[area] = []
+                    clubs_by_region[area].append(club_obj)
+        
+        # Convert to list of regions with clubs
+        result = []
+        for region, clubs in clubs_by_region.items():
+            result.append({
+                "region": region,
+                "clubs": sorted(clubs, key=lambda x: x["name"])
+            })
+        
+        # Sort regions in a specific order
+        region_order = ["מרכז", "שרון", "שפלה", "ירושלים והסביבה", "דרום", "צפון", "אחר"]
+        result.sort(key=lambda x: region_order.index(x["region"]) if x["region"] in region_order else len(region_order))
+        
+        return {"clubs_by_region": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/crawl-status")
+async def get_crawl_status():
+    """Get current crawl status."""
+    try:
+        holmes_file = get_latest_jsonl_file()
+        status = websocket_manager.get_status()
+        
+        if holmes_file:
+            # Get the file's last modification time
+            last_update = os.path.getmtime(holmes_file)
+            last_update_str = datetime.fromtimestamp(last_update).isoformat()
+            status["latest_crawl_date"] = last_update_str
+        
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/class-names")
+async def get_class_names():
+    """Get list of all class names from the latest data."""
+    try:
+        holmes_file = get_latest_jsonl_file()
+        if not holmes_file:
+            return {"class_names": []}
+        
+        data = read_jsonl_file(holmes_file)
+        class_names = set()
+        
+        for entry in data:
+            if "classes" in entry:
+                for class_data in entry["classes"]:
+                    if "name" in class_data and class_data["name"]:
+                        class_names.add(class_data["name"])
+        
+        return {"class_names": sorted(list(class_names))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/classes")
+async def get_classes(class_name: str = None, day_name_hebrew: List[str] = Query(None), instructor: str = None, club: str = None):
+    """Get filtered list of classes from the latest data."""
+    try:
+        holmes_file = get_latest_jsonl_file()
+        if not holmes_file:
+            return {"classes": [], "regions_found": [], "opening_hours": {}}
+        
+        data = read_jsonl_file(holmes_file)
+        classes = []
+        regions_found = set()
+        opening_hours = {}
+        club_to_region = {}  # Map club names to their regions
+        
+        # First pass: collect club regions and opening hours
+        for entry in data:
+            if "club_name" in entry and "area" in entry:
+                # Only add known regions to the mapping
+                if entry["area"] and entry["area"] != "לא ידוע":
+                    club_to_region[entry["club_name"]] = entry["area"]
+                if "opening_hours" in entry:
+                    opening_hours[entry["club_name"]] = entry["opening_hours"]
+        
+        # Second pass: process classes
+        seen_classes = set()  # Track unique classes
+        for entry in data:
+            if "classes" in entry:
+                for class_data in entry["classes"]:
+                    # Apply filters
+                    if class_name and class_data.get("name") != class_name:
+                        continue
+                    if day_name_hebrew and class_data.get("day_name_hebrew") not in day_name_hebrew:
+                        continue
+                    if instructor and class_data.get("instructor") != instructor:
+                        continue
+                    if club and class_data.get("club") != club:
+                        continue
+                    
+                    # Create a unique key for the class
+                    class_key = (
+                        class_data.get("club"),
+                        class_data.get("day"),
+                        class_data.get("time"),
+                        class_data.get("name"),
+                        class_data.get("instructor"),
+                        class_data.get("location")
+                    )
+                    
+                    # Skip if we've already seen this class
+                    if class_key in seen_classes:
+                        continue
+                    seen_classes.add(class_key)
+                    
+                    # Add region information to class data
+                    club_name = class_data.get("club")
+                    if club_name in club_to_region:
+                        class_data["area"] = club_to_region[club_name]
+                        regions_found.add(club_to_region[club_name])
+                    
+                    # Add to classes list
+                    classes.append(class_data)
+        
+        # Define region order
+        region_order = ["מרכז", "שרון", "שפלה", "דרום", "צפון"]
+        
+        # Sort classes by region (according to region_order) and then by day and time
+        classes.sort(key=lambda x: (
+            region_order.index(x.get("area", "")) if x.get("area") in region_order else len(region_order),
+            x.get("day", ""),
+            x.get("time", "")
+        ))
+        
+        # Sort regions according to region_order
+        sorted_regions = sorted(list(regions_found), 
+                              key=lambda x: region_order.index(x) if x in region_order else len(region_order))
+        
+        return {
+            "classes": classes,
+            "regions_found": sorted_regions,
+            "opening_hours": opening_hours
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def run_crawler(clubs_to_process):
+    """Run the crawler and update status."""
+    crawler = None
+    try:
+        logger.info("run_crawler started.")
+        
+        # Make sure the Playwright installation is available
+        try:
+            from playwright.async_api import async_playwright
+            logger.info("Playwright module imported successfully")
+            
+            # Check if browsers are installed
+            import subprocess
+            import sys
+            
+            logger.info("Checking Playwright browser installation...")
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"],
+                capture_output=True,
+                text=True
+            )
+            logger.info(f"Playwright install result: {result.returncode}")
+            if result.stdout:
+                logger.info(f"Playwright install output: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Playwright install warnings: {result.stderr}")
+                
+            # Give the system a moment to complete any background tasks
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning(f"Failed to check Playwright installation: {e}")
+        
+        # Create crawler instance with detailed parameters
+        logger.info("Creating HolmesPlaceCrawler instance...")
+        crawler = HolmesPlaceCrawler(
+            websocket_manager=websocket_manager,
+            headless=False,  # Set to False for debugging visibility
+            clubs_to_process=clubs_to_process,
+            output_dir=os.path.join(os.path.dirname(__file__), "data")
+        )
+        
+        # Add a small delay before starting the crawler
+        await asyncio.sleep(1)
+        
+        # Start the crawler with more detailed logging
+        logger.info("Calling crawler.start()...")
+        try:
+            await crawler.start()
+        except Exception as start_error:
+            logger.error(f"Error during crawler.start(): {str(start_error)}", exc_info=True)
+            raise start_error
+        
+        # Add a delay before updating status
+        await asyncio.sleep(1)
+        
+        logger.info("run_crawler completed successfully.")
+        # Update status to completed
+        await websocket_manager.update_status(
+            is_running=False,
+            progress=100,
+            current_club=None,
+            error=None
+        )
+    except Exception as e:
+        # Update status with error
+        error_msg = str(e)
+        logger.error(f"Crawler error in run_crawler: {error_msg}", exc_info=True)
+        await websocket_manager.update_status(
+            is_running=False,
+            error=error_msg
+        )
+    finally:
+        # Make sure browser is closed properly even if there was an error
+        if crawler and hasattr(crawler, 'browser_manager') and hasattr(crawler.browser_manager, '_cleanup'):
+            try:
+                logger.info("Ensuring browser resources are cleaned up...")
+                await crawler.browser_manager._cleanup()
+                # Give some time for cleanup to complete
+                await asyncio.sleep(1)
+            except Exception as cleanup_error:
+                logger.error(f"Error during final browser cleanup: {str(cleanup_error)}")
 
 if __name__ == "__main__":
     import uvicorn
-    try:
-        logging.info("Starting FastAPI server on port 8080...")
-        uvicorn.run(app, host="0.0.0.0", port=8080)
-    except OSError as e:
-        logging.error(f"Failed to start server: {str(e)}")
-        if "address already in use" in str(e).lower():
-            logging.error("Port 8080 is already in use. Please free the port and try again.")
-    except Exception as e:
-        logging.error(f"Unexpected error starting server: {str(e)}") 
+    # Use 0.0.0.0 to allow connections from other machines
+    host = os.environ.get("API_HOST", "0.0.0.0")
+    port = int(os.environ.get("API_PORT", 8000))
+    log_level = os.environ.get("LOG_LEVEL", "info")
+    
+    logger.info(f"Starting server on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level=log_level) 

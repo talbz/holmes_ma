@@ -7,7 +7,7 @@ export const useClassNames = () => {
   return useQuery(
     'classNames', 
     async () => {
-      const url = `http://localhost:8080/class-names`;
+      const url = `http://localhost:8000/api/class-names`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error('Failed to fetch class names');

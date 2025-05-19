@@ -38,7 +38,7 @@ function AppContent() {
   const [toasts, setToasts] = useState([]);
   
   // Use the crawl status hook
-  const { data: crawlStatusData, isLoading: crawlStatusLoading, error: crawlStatusError } = useCrawlStatus();
+  const { data: crawlStatusData, isLoading: crawlStatusLoading, error: crawlStatusError, refetch: refetchCrawlStatus } = useCrawlStatus();
   
   // Initialize dataInfo with crawlStatusData when available
   const [dataInfo, setDataInfo] = useState({
@@ -107,7 +107,7 @@ function AppContent() {
     reconnect,
     sendMessage
   } = useWebSocket({
-    url: 'ws://localhost:8080/ws',
+    url: 'ws://localhost:8000/ws',
     autoConnect: true,
     onStatusChange: useCallback((status, data) => {
       console.log(`App: WebSocket status change: ${status}`, data);
@@ -130,6 +130,9 @@ function AppContent() {
         // Refresh data info to get updated last crawl date using the new endpoint
         sendMessage({ action: 'get_crawl_status' });
         
+        // Refresh HTTP crawl status data
+        refetchCrawlStatus();
+        
         // Refresh clubs data from API after successful crawl
         refetchClubs();
       }
@@ -138,7 +141,7 @@ function AppContent() {
         console.log('App: Received crawl_error event', data);
         addToast(`שגיאה באיסוף נתונים: ${data?.message || 'שגיאה לא ידועה'}`, 'error');
       }
-    }, [addToast, refetchClubs])
+    }, [addToast, refetchClubs, refetchCrawlStatus])
   });
   
   // Handle starting the crawl process - Use HTTP POST to trigger crawl
@@ -146,7 +149,7 @@ function AppContent() {
     try {
       addToast('בקשת איסוף נתונים נשלחה', 'info');
       // Trigger the crawl via HTTP endpoint
-      const response = await axios.post('http://localhost:8080/start-crawl', { headless: headlessMode });
+      const response = await axios.post('http://localhost:8000/api/start-crawl', { headless: headlessMode });
       console.log('Start crawl response:', response.data);
       if (response.data && response.data.status) {
         addToast(response.data.status, 'info');
@@ -266,6 +269,7 @@ function AppContent() {
             error={classesError} // Pass error state
             clubStatuses={clubStatuses || {}}
             openingHours={classesData?.opening_hours || {}}
+            availableClubs={clubsData || []} // Pass clubs data from useClubs
           />
         </section>
       </main>

@@ -9,7 +9,7 @@ export const useClubs = () => {
     ['clubs'], // Query key
     async () => {
       try {
-        const response = await fetch('http://localhost:8080/clubs');
+        const response = await fetch('http://localhost:8000/api/clubs');
         
         if (!response.ok) {
           throw new Error('Failed to fetch clubs');
@@ -108,7 +108,7 @@ export const useClubsWithStatus = () => {
   return useQuery(
     ['clubs-with-status'],
     async () => {
-      const response = await fetch('http://localhost:8080/clubs-with-status');
+      const response = await fetch('http://localhost:8000/api/clubs-with-status');
       if (!response.ok) {
         throw new Error('Failed to fetch clubs with status');
       }

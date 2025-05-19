@@ -7,6 +7,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from typing import Optional, List, Dict, Any # For type hinting
 import re
 import pytz
+from utils.config import Config
 
 # Assuming ConnectionManager is defined in app.py or a shared module
 # If not, you might need to adjust the import or pass it differently.
@@ -28,11 +29,11 @@ class HolmesPlaceCrawler:
     """Handles crawling Holmes Place website for class schedules."""
     # Add type hint for websocket_manager if possible (e.g., from app import ConnectionManager)
     def __init__(self, base_url="https://www.holmesplace.co.il/", 
-                 output_dir="data", headless=False, clubs_filter=None,
+                 output_dir=None, headless=False, clubs_filter=None,
                  websocket_manager=None, stop_event=None, clubs_to_process=None):
         """Initializes the HolmesPlaceCrawler with configuration settings."""
         self.base_url = base_url
-        self.output_dir = output_dir
+        self.output_dir = output_dir or Config.OUTPUT_DIR
         self.headless = headless
         self.clubs_filter = clubs_filter
         self.browser = None
@@ -50,21 +51,45 @@ class HolmesPlaceCrawler:
         self.current_club_index = 0
         self.websocket_manager = websocket_manager
         self.clubs_to_process = clubs_to_process
+        self.crawl_results = {}  # Initialize crawl_results dictionary
         # Ensure output directory exists
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
         # Store screenshot directory
-        self.screenshot_dir = os.path.join(os.path.dirname(output_dir), "screenshots")
+        self.screenshot_dir = os.path.join(os.path.dirname(str(self.output_dir)), "screenshots")
         os.makedirs(self.screenshot_dir, exist_ok=True)
         # Use a single output JSONL file for all crawls
         self.filename = os.path.join(self.output_dir, "holmes.jsonl")
         self.collected_class_data = [] # Store all class data in memory
 
+    async def _launch_browser(self):
+        """Launch a new browser instance."""
+        logger.info("Attempting to launch browser...")
+        try:
+            playwright = await async_playwright().start()
+            logger.info(f"Launching Chromium (headless={self.headless})...")
+            browser = await playwright.chromium.launch(
+                headless=self.headless,
+                args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage']
+            )
+            logger.info("Browser launched successfully.")
+            return browser
+        except Exception as e:
+            logging.error(f"Failed to launch browser: {str(e)}", exc_info=True)
+            raise
+
     async def _send_status(self, type: str, message: str, data: Optional[Dict[str, Any]] = None):
-        """Helper to send status updates via WebSocket."""
+        """Helper to send status updates via WebSocket and log with proper Hebrew display."""
+        # Reverse Hebrew segments for correct readability
+        def adjust_message(msg):
+            # If contains Hebrew characters, reverse order
+            if re.search('[\u0590-\u05FF]', msg):
+                return msg[::-1]
+            return msg
+        adj_message = adjust_message(message)
         if self.websocket_manager:
             status_data = {
                 "type": type,
-                "message": message,
+                "message": adj_message,
                 "timestamp": datetime.now().isoformat(),
             }
             if data:
@@ -87,7 +112,7 @@ class HolmesPlaceCrawler:
                     if len(self._status_buffer) < 100:
                         self._status_buffer.append(status_data)
                     # Don't try to reconnect here - just note the disconnect and continue crawling
-        logging.info(f"Status Update ({type}): {message} {data or ''}")
+        logging.info(f"Status Update ({type}): {adj_message} {data or ''}")
 
     async def _take_screenshot(self, stage_name: str):
         """Takes a screenshot for debugging and returns the path."""
@@ -189,250 +214,60 @@ class HolmesPlaceCrawler:
             # Don't fail the whole crawl, just log it.
         
     async def start(self):
-        """Main method to start the crawling process using footer links."""
-        # Initialize status buffer for storing messages during disconnection
-        self._status_buffer = []
-        
-        await self._send_status('crawl_started', 'תהליך איסוף הנתונים מתחיל...')
-        critical_error_occurred = False
-        self.browser = None
-        self.crawl_results = {} # Reset results for this run
-        self.collected_class_data = [] # Reset collected data
-        club_info_list_to_iterate = [] # Define variable to hold the list of clubs to process
-        
-        # Add connection check before starting
+        """Start the crawling process"""
+        logger.info("HolmesPlaceCrawler.start() called.")
         try:
-            # Test WebSocket connection if we have a manager
-            if self.websocket_manager:
-                # Simple ping message to check connection
-                ping_data = {"type": "ping", "message": "Checking connection", "timestamp": datetime.now().isoformat()}
-                if hasattr(self.websocket_manager, 'broadcast'):
-                    await self.websocket_manager.broadcast(json.dumps(ping_data))
-                    logging.info("WebSocket connection checked successfully")
-        except Exception as conn_check_err:
-            logging.warning(f"WebSocket connection check failed: {conn_check_err}. Will continue crawling without real-time updates.")
-            # We continue anyway since the crawler should work even without WebSocket
-
-        try:
-            await self._check_stop_event("crawl start")
-            async with async_playwright() as p:
-                self.playwright = p
-                launch_options = {"headless": self.headless}
-                logging.info(f"Launching browser with options: {launch_options}")
-                self.browser = await self._retry_operation(
-                    lambda: self.playwright.chromium.launch(**launch_options),
-                    "Launch browser"
+            await self.websocket_manager.update_status(
+                is_running=True,
+                progress=0,
+                current_club=None,
+                error=None
+            )
+            
+            # Initialize browser and page
+            logger.info("Calling _launch_browser...")
+            self.browser = await self._launch_browser()
+            if not self.browser:
+                 logger.error("_launch_browser returned None. Cannot proceed.")
+                 raise Exception("Browser launch failed critically.")
+                 
+            logger.info("Browser initialized. Creating new page...")
+            self.page = await self.browser.new_page()
+            logger.info("New page created.")
+            
+            # Navigate to the website
+            logger.info(f"Navigating to base URL: {self.base_url}...")
+            await self.page.goto(self.base_url)
+            logger.info("Navigation to base URL complete.")
+            
+            # Process each club
+            total_clubs = len(self.clubs_to_process)
+            for i, club in enumerate(self.clubs_to_process):
+                await self.websocket_manager.update_status(
+                    progress=(i / total_clubs) * 100,
+                    current_club=club["name"]
                 )
-                await self._check_stop_event("browser launch")
-
-                self.page = await self._retry_operation(
-                    lambda: self.browser.new_page(),
-                    "Open new page"
-                )
-                await self._check_stop_event("page creation")
-
-                self.page.set_default_timeout(DEFAULT_TIMEOUT)
-                self.page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
-
-                await self._send_status('progress', 'Navigating to Holmes Place website', {"progress": 5})
-                await self._retry_operation(
-                    lambda: self.page.goto(self.base_url, wait_until='domcontentloaded'),
-                    f"Navigate to {self.base_url}"
-                )
-                await self._check_stop_event("navigation complete")
-                logging.info("Navigation complete. Checking for interfering modals.")
-                await self._close_interfering_modal("after_navigation")
-                
-                # --- Determine Clubs to Process --- 
-                if self.clubs_to_process:
-                    logging.info(f"Retrying specific clubs: {[c['name'] for c in self.clubs_to_process]}")
-                    club_info_list_to_iterate = self.clubs_to_process
-                    # Send clubs_found based on the retry list
-                    await self._send_status('clubs_found', f"מנסה מחדש {len(club_info_list_to_iterate)} סניפים.", {"clubs": [club['name'] for club in club_info_list_to_iterate]})
-                else:
-                    logging.info("Starting full crawl, fetching club list from footer...")
-                    # --- Get Club Links from Footer --- 
-                    await self._send_status('progress', 'Getting club list from footer', {"progress": 10})
-                    footer_nav_selector = "div.footer-navigation"
-                    club_link_selector = f"{footer_nav_selector} .footer-h4-desktop li a" 
-                    await self._retry_operation(lambda: self.page.wait_for_selector(footer_nav_selector, state='attached'), "Wait for footer navigation section")
-                    club_link_elements = await self._retry_operation(lambda: self.page.query_selector_all(club_link_selector), "Find club links in footer")
-                    club_info_list = []
-                    for link_element in club_link_elements:
-                        try:
-                            href = await link_element.get_attribute('href')
-                            name = await link_element.text_content()
-                            name = name.strip() if name else None
-                            if href and name and href != '#':
-                               if not href.startswith(('http://', 'https://')):
-                                   href = self.base_url.rstrip('/') + ('/' if not href.startswith('/') else '') + href
-                               club_info_list.append({"name": name, "url": href})
-                        except Exception as link_err:
-                            logging.warning(f"Could not extract info from a footer link: {link_err}")
-                    # -------------------------------------
-                    
-                    if not club_info_list:
-                        await self._send_status('error', 'Could not find any valid club links in the footer.')
-                        critical_error_occurred = True
-                    
-                    if not critical_error_occurred:
-                        # --- Filter Club List --- 
-                        keywords_to_include = ["הולמס פלייס", "גו אקטיב"]
-                        filtered_club_list = [club for club in club_info_list if any(keyword in club['name'] for keyword in keywords_to_include)]
-                        if not filtered_club_list:
-                            await self._send_status('error', 'No relevant clubs (Holmes Place / Go Active) found in footer links.')
-                            critical_error_occurred = True
-                        else:
-                            club_info_list_to_iterate = filtered_club_list
-                            logging.info(f"Filtered clubs to process: {[club['name'] for club in club_info_list_to_iterate]}")
-                            await self._send_status('clubs_found', f"נמצאו {len(club_info_list_to_iterate)} סניפים רלוונטיים לעיבוד.", {"clubs": [club['name'] for club in club_info_list_to_iterate]})
-                # --------------------------------
-                
-                # Proceed only if we have clubs to iterate and no critical error occurred earlier
-                if not critical_error_occurred and club_info_list_to_iterate:
-                    total_clubs = len(club_info_list_to_iterate)
-                    # --- Iterate Through Club Pages --- 
-                    for index, club_info in enumerate(club_info_list_to_iterate):
-                        await self._check_stop_event(f"processing club {index+1}")
-                        club_name = club_info['name']
-                        club_url = club_info['url']
-                        progress_percent = int(15 + (index / total_clubs) * 80)
-                        
-                        await self._send_status(
-                            'club_processing', 
-                            f'מעבד סניף {index + 1}/{total_clubs}: {club_name}', 
-                            {"club_name": club_name, "current": index + 1, "total": total_clubs, "progress_percent": progress_percent}
-                        )
-                        
-                        club_succeeded = False # Track success for this specific club
-                        try:
-                            # Navigate to the specific club page
-                            logging.info(f"Navigating to club page: {club_url}")
-                            await self._retry_operation(
-                                lambda: self.page.goto(club_url, wait_until='domcontentloaded'),
-                                f"Navigate to {club_name} page ({club_url})"
-                            )
-                            logging.info(f"Navigation to {club_name} page successful. Checking for modals.")
-                            await self._close_interfering_modal(f"on_{club_name}_page")
-                            
-                            # Process schedule and check if any classes were found
-                            classes_processed_count = await self._process_club_schedule(club_name)
-                            if classes_processed_count > 0:
-                                club_succeeded = True
-                                
-                        except Exception as page_nav_err:
-                            error_message = f"Failed to navigate/process club page {club_name} at {club_url}: {type(page_nav_err).__name__} - {page_nav_err}"
-                            logging.error(error_message)
-                            
-                            # Take a screenshot of the error
-                            screenshot_path = await self._take_screenshot(f"navigation_error_{club_name}")
-                            
-                            await self._send_status('error', f"שגיאה בניווט או עיבוד דף סניף {club_name}")
-                            # No need to send club_failed here, handled by finally
-                            continue # Continue to next club, but mark this one failed below
-                        finally:
-                            # Update crawl results status for the current club
-                            status = 'success' if club_succeeded else 'failed'
-                            if club_name in self.crawl_results:
-                                # Update existing entry
-                                self.crawl_results[club_name]['status'] = status
-                                if not club_succeeded and 'error_reason' not in self.crawl_results[club_name]:
-                                    # Add generic error reason if none exists yet
-                                    self.crawl_results[club_name]['error_reason'] = "Failed to process club page"
-                                    if 'page_nav_err' in locals():
-                                        self.crawl_results[club_name]['error_reason'] = str(page_nav_err)
-                                    if 'screenshot_path' in locals() and screenshot_path:
-                                        self.crawl_results[club_name]['screenshot'] = screenshot_path
-                            else:
-                                # Create new entry
-                                result_entry = {"url": club_url, "status": status}
-                                if not club_succeeded:
-                                    # Add error information for failed clubs
-                                    result_entry['error_reason'] = "Failed to process club page"
-                                    if 'page_nav_err' in locals():
-                                        result_entry['error_reason'] = str(page_nav_err)
-                                    if 'screenshot_path' in locals() and screenshot_path:
-                                        result_entry['screenshot'] = screenshot_path
-                                self.crawl_results[club_name] = result_entry
-                                
-                            # Send WebSocket status for the specific club only AFTER attempting it
-                            if status == 'success':
-                                 await self._send_status('club_success', f"עיבוד סניף {club_name} הסתיים (נמצאו שיעורים)", {"club_name": club_name})
-                            else:
-                                 await self._send_status('club_failed', f"עיבוד סניף {club_name} נכשל", {"club_name": club_name})
-                                 
-                    await self._send_status('progress', 'Finished processing all clubs.', {"progress": 95})
-        
-        except asyncio.CancelledError:
-             critical_error_occurred = True
-             logging.warning("Crawler task cancelled (likely due to stop event).")
-             await self._send_status('crawl_failed', 'תהליך איסוף הנתונים הופסק.')
+                await self._process_club(club)
+            
+            await self.websocket_manager.update_status(
+                is_running=False,
+                progress=100,
+                current_club=None
+            )
+            
         except Exception as e:
-             critical_error_occurred = True 
-             final_error_message = f"CRITICAL CRAWLING ERROR encountered: {type(e).__name__} - {e}"
-             logging.error(final_error_message, exc_info=True)
-             await self._send_status('error', f"שגיאה קריטית בתהליך האיסוף: {str(e)}")
-             
+            await self.websocket_manager.update_status(
+                is_running=False,
+                error=str(e)
+            )
+            logger.error(f"Error during HolmesPlaceCrawler.start(): {str(e)}", exc_info=True)
+            raise
         finally:
-            # Browser cleanup
+            logger.info("HolmesPlaceCrawler.start() finished (in finally block).")
             if self.browser:
-                try:
-                    await self.browser.close()
-                    logging.info("Browser closed.")
-                except Exception as close_err:
-                     logging.error(f"Error closing browser: {close_err}")
-            
-            # --- Save Final Status --- 
-            try:
-                # Add a field to indicate if the crawl was stopped early
-                crawl_data = {
-                    "crawl_results": self.crawl_results,
-                    "was_stopped_early": self.stop_event and self.stop_event.is_set(),
-                    "timestamp": datetime.now().isoformat(),
-                    "critical_error_occurred": critical_error_occurred
-                }
-                with open(os.path.join(self.output_dir, "last_crawl_status.json"), 'w', encoding='utf-8') as f:
-                    json.dump(crawl_data, f, ensure_ascii=False, indent=2)
-                logging.info(f"Saved final crawl status to {os.path.join(self.output_dir, 'last_crawl_status.json')}")
-            except Exception as save_err:
-                logging.error(f"Failed to save final crawl status: {save_err}")
-            # -------------------------
-
-            # --- Save JSONL Data File --- 
-            # Only save the data file if the crawl was complete (not stopped early, no critical errors)
-            # and if we have collected data from at least one successful club
-            was_stopped_early = self.stop_event and self.stop_event.is_set()
-            has_successful_clubs = any(result['status'] == 'success' for result in self.crawl_results.values())
-            
-            if not was_stopped_early and not critical_error_occurred and has_successful_clubs and self.crawl_results:
-                try:
-                    # Write consolidated club results to single holmes.jsonl file
-                    consolidated_results = self.get_results()
-                    timestamp = datetime.now().isoformat()
-                    with open(self.filename, 'a', encoding='utf-8') as f:
-                        for club_name, club_data in consolidated_results.items():
-                            club_data["crawl_timestamp"] = timestamp
-                            f.write(json.dumps(club_data, ensure_ascii=False) + '\n')
-                    logging.info(f"Appended {len(consolidated_results)} entries to {self.filename}")
-                except Exception as save_data_err:
-                    logging.error(f"Failed to save data to file {self.filename}: {save_data_err}")
-            else:
-                logging.warning(f"Not saving data file due to incomplete crawl: stopped_early={was_stopped_early}, critical_error={critical_error_occurred}, successful_clubs={has_successful_clubs}")
-            # -------------------------
-
-            # Determine overall success/failure for final message
-            if self.stop_event and self.stop_event.is_set():
-                 if not critical_error_occurred:
-                    await self._send_status('crawl_failed', 'תהליך איסוף הנתונים הופסק.', {"was_complete": False})
-            elif not critical_error_occurred:
-                # Check if any clubs actually failed within the run if it wasn't stopped/critical
-                if any(result['status'] == 'failed' for result in self.crawl_results.values()):
-                    await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים (עם שגיאות בחלק מהסניפים).', {"progress": 100, "was_complete": True})
-                else:
-                    await self._send_status('crawl_complete', 'איסוף הנתונים הסתיים בהצלחה.', {"progress": 100, "was_complete": True})
-            else:
-                 # If critical error happened earlier, send failed status
-                await self._send_status('crawl_failed', 'תהליך איסוף הנתונים נכשל.', {"was_complete": False})
+                logger.info("Closing browser...")
+                await self.browser.close()
+                logger.info("Browser closed.")
 
     async def _process_club_schedule(self, club_name: str) -> int:
         """Processes schedules for a single club page."""
@@ -857,42 +692,49 @@ class HolmesPlaceCrawler:
         """Processes a single club, extracting schedules and saving data."""
         club_name = club_info["name"]
         club_url = club_info["url"]
-        self.current_club_index += 1
         
         # Record start time for this club
         self.club_start_times[club_name] = datetime.now().isoformat()
         
-        await self._send_status('club_processing', 
-                              message=f"מעבד סניף {self.current_club_index}/{self.total_clubs}: {club_name}", 
-                              data={"club_name": club_name, 
-                                   "current": self.current_club_index, 
-                                   "total": self.total_clubs,
-                                   "progress_percent": round((self.current_club_index / self.total_clubs) * 100)})
+        # Initialize crawl results for this club
+        self.crawl_results[club_name] = {
+            "status": "processing",
+            "url": club_url,  # Save the URL
+            "error_reason": None
+        }
         
-        if self.clubs_filter and club_name not in self.clubs_filter:
-            logging.info(f"Skipping club {club_name} as it's not in the filter list")
-            self.processed_clubs[club_name] = "skipped"
-            return
-            
-        # Check if we should stop
-        if self.stop_event.is_set():
-            logging.warning(f"Stop event detected during: processing club {self.current_club_index}. Stopping crawl.")
-            return
-            
-        logging.info(f"Navigating to club page: {club_url}")
         try:
             await self._retry_operation(
                 lambda: self.page.goto(club_url, wait_until="networkidle"),
                 f"Navigate to club page: {club_url}"
             )
             
-            # Store region for this club
-            region = get_club_region(club_name)
-            self.club_to_region[club_name] = region
+            # Determine area based on club name
+            if "ירושלים" in club_name or "מבשרת" in club_name or "מודיעין" in club_name:
+                area = "ירושלים והסביבה"
+            elif "תל אביב" in club_name or "רמת גן" in club_name or "בני ברק" in club_name or "גבעתיים" in club_name or "דיזנגוף" in club_name or "עזריאלי" in club_name or "פתח תקווה" in club_name or "ראש העין" in club_name or "גבעת שמואל" in club_name or "קריית אונו" in club_name:
+                area = "מרכז"
+            elif "חיפה" in club_name or "קריות" in club_name or "קריון" in club_name or "גרנד קניון" in club_name or "חדרה" in club_name or "קיסריה" in club_name or "נהריה" in club_name:
+                area = "צפון"
+            elif "באר שבע" in club_name or "אשדוד" in club_name or "אילת" in club_name:
+                area = "דרום"
+            elif "נתניה" in club_name or "הרצליה" in club_name or "רעננה" in club_name or "כפר סבא" in club_name or "שבעת הכוכבים" in club_name or "הוד השרון" in club_name:
+                area = "שרון"
+            elif "רחובות" in club_name or "ראשון לציון" in club_name or "נס ציונה" in club_name or "לוד" in club_name or "יבנה" in club_name:
+                area = "שפלה"
+            else:
+                area = "מרכז"  # Default to מרכז instead of אחר
+            
+            # Store area for this club
+            self.club_to_region[club_name] = area
             
             # Extract opening hours and address before processing the schedule
-            await self._extract_club_opening_hours(club_name)
-            await self._extract_club_address(club_name)
+            opening_hours = await self._extract_club_opening_hours(club_name)
+            address = await self._extract_club_address(club_name)
+            
+            # Save opening hours to crawl results
+            self.crawl_results[club_name]["opening_hours"] = opening_hours
+            self.crawl_results[club_name]["address"] = address
             
             # Initialize an empty list for this club's classes
             self.club_to_classes[club_name] = []
@@ -903,45 +745,15 @@ class HolmesPlaceCrawler:
             # Record end time for this club
             self.club_end_times[club_name] = datetime.now().isoformat()
             
-            if classes_count > 0:
-                logging.info(f"Club {club_name} marked as SUCCESS as some classes were processed.")
-                self.processed_clubs[club_name] = "success"
-                await self._send_status('club_success', 
-                                      message=f"עיבוד סניף {club_name} הסתיים (נמצאו שיעורים)",
-                                      data={"club_name": club_name})
-            else:
-                logging.warning(f"Club {club_name} marked as FAILED as no classes were processed.")
-                self.processed_clubs[club_name] = "failed"
-                if 'error_reason' not in self.crawl_results.get(club_name, {}):
-                    self.crawl_results[club_name]['error_reason'] = "No classes found"
-                await self._send_status('club_failed', 
-                                      message=f"עיבוד סניף {club_name} נכשל (לא נמצאו שיעורים)",
-                                      data={"club_name": club_name})
-                                      
+            # Update status to success
+            self.crawl_results[club_name]["status"] = "success"
+            self.crawl_results[club_name]["classes_count"] = classes_count
+            
         except Exception as e:
-            # Record end time for this club even if it failed
-            self.club_end_times[club_name] = datetime.now().isoformat()
-            
-            if isinstance(e, asyncio.CancelledError):
-                raise  # Re-raise cancellation
-                
-            error_message = f"Error processing club {club_name}: {str(e)}"
-            logging.error(error_message)
-            
-            # Store the error reason in the crawl results
-            if club_name in self.crawl_results:
-                self.crawl_results[club_name]['error_reason'] = str(e)
-            else:
-                self.crawl_results[club_name] = {
-                    "status": "failed",
-                    "url": club_url,
-                    "error_reason": str(e)
-                }
-                
-            await self._send_status('club_failed', 
-                                  message=f"עיבוד סניף {club_name} נכשל",
-                                  data={"club_name": club_name})
-            self.processed_clubs[club_name] = "failed"
+            logging.error(f"Error processing club {club_name}: {str(e)}")
+            self.crawl_results[club_name]["status"] = "failed"
+            self.crawl_results[club_name]["error_reason"] = str(e)
+            raise
 
     def _calculate_duration(self, start_time_str, end_time_str):
         """Calculate duration in seconds between two ISO format timestamps"""
@@ -1014,7 +826,7 @@ class HolmesPlaceCrawler:
 
 # Example usage (if run directly)
 async def main():
-    crawler = HolmesPlaceCrawler() # Add websocket_manager if needed
+    crawler = HolmesPlaceCrawler(headless=True)  # Enable headless mode
     await crawler.start()
 
 if __name__ == "__main__":

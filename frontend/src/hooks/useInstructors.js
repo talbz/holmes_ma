@@ -7,7 +7,7 @@ export const useInstructors = () => {
   return useQuery(
     'instructors', 
     async () => {
-      const url = `http://localhost:8080/instructors`;
+      const url = `http://localhost:8000/api/instructors`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error('Failed to fetch instructors');

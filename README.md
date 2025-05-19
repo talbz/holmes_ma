@@ -1,85 +1,69 @@
-# Holmes Place Schedule Application
+# Holmes Place Crawler
 
-This application provides a user-friendly way to view and filter Holmes Place fitness clubs' class schedules. It consists of a FastAPI backend with WebSocket support and a React frontend.
+A web application for crawling and displaying Holmes Place class schedules.
 
 ## Features
 
-- Web crawler that fetches class schedules from the Holmes Place website
-- Real-time updates via WebSocket during crawling
-- Filter classes by name, instructor, day, time, and club
-- Modern UI with responsive design
-- Toast notifications for user feedback
+- Real-time crawling of Holmes Place class schedules
+- WebSocket-based status updates
+- Modern React frontend with real-time updates
+- Data freshness indicators
+- Club filtering and selection
 
-## Project Structure
-
-```
-holmes_crawler/
-├── backend/           # Python FastAPI backend
-│   ├── app.py         # Main API endpoints and WebSocket server
-│   ├── crawler.py     # Web crawler for Holmes Place website
-│   └── data/          # Data storage for crawled schedules
-├── frontend/          # React frontend
-│   ├── src/           # Source code
-│   │   ├── components/# React components
-│   │   ├── hooks/     # Custom React hooks
-│   │   ├── styles/    # SCSS styles
-│   │   ├── App.jsx    # Main App component
-│   │   └── index.jsx  # Entry point
-│   ├── index.html     # HTML template
-│   └── package.json   # Dependencies and scripts
-└── README.md          # Project documentation
-```
-
-## Setup and Installation
+## Setup
 
 ### Backend
 
-1. Make sure you have Python 3.7+ installed
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
 2. Install dependencies:
-   ```bash
-   cd backend
-   pip install fastapi uvicorn websockets playwright
-   playwright install
-   ```
-3. Run the backend server:
-   ```bash
-   python app.py
-   ```
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+3. Set up environment variables:
+Create a `.env` file in the backend directory with:
+```
+DATA_DIR=./data
+```
 
 ### Frontend
 
-1. Make sure you have Node.js 14+ installed
-2. Install dependencies:
-   ```bash
-   cd frontend
-   npm install
-   ```
-3. Run the frontend development server:
-   ```bash
-   npm start
-   ```
+1. Install dependencies:
+```bash
+cd frontend
+npm install
+```
 
-## Usage
+2. Build the frontend:
+```bash
+npm run build
+```
 
-1. Access the web application at http://localhost:1234
-2. Click the "התחל איסוף נתונים" (Start Data Collection) button to begin crawling
-3. Monitor the crawling process with real-time updates
-4. Once crawling is complete, use the filters to find specific classes
-5. Click on a club in the club list to filter classes by that club
+## Running the Application
 
-## Technologies Used
+1. Start the backend server:
+```bash
+cd backend
+uvicorn main:app --reload
+```
 
-- **Backend**:
-  - FastAPI: Fast, modern Python web framework
-  - WebSockets: For real-time communication
-  - Playwright: For browser automation and crawling
-  
-- **Frontend**:
-  - React: UI library
-  - React Query: Data fetching and state management
-  - SCSS: For styling
-  - Parcel: For bundling and development
+2. The frontend will be served automatically by the backend at http://localhost:8000
 
-## License
+## Data Storage
 
-This project is released under the MIT License. 
+- Crawled data is stored in JSONL format in the specified data directory
+- Each crawl appends to the existing data file
+- The application tracks data freshness and displays appropriate warnings
+
+## API Endpoints
+
+- `GET /api/status` - Get current crawl status
+- `POST /api/start-crawl` - Start a new crawl
+- `GET /api/data` - Get the latest crawl data
+- `WS /ws` - WebSocket connection for real-time updates 

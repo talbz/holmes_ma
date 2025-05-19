@@ -90,8 +90,21 @@
 
   .class-time {
     font-size: $font-size-base;
-    font-weight: $font-weight-bold;
+    font-weight: 600;
     color: $primary-color;
+    display: flex;
+    align-items: center;
+
+    .class-passed {
+      display: inline-block;
+      margin-left: 5px;
+      color: #d32f2f;
+      font-size: 0.8rem;
+      font-weight: bold;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background-color: rgba(211, 47, 47, 0.1);
+    }
   }
 
   .class-name {
@@ -277,6 +290,17 @@
       }
     }
   }
+}
+
+.class-passed {
+  display: inline-block;
+  margin-right: 5px;
+  color: #d32f2f;
+  font-size: 0.8rem;
+  font-weight: bold;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background-color: rgba(211, 47, 47, 0.1);
 }
 
 // Media queries for responsive design

@@ -2,7 +2,9 @@
 import asyncio
 import json
 import os
-from crawler import HolmesPlaceCrawler
+from backend.crawler import HolmesPlaceCrawler
+import logging
+from datetime import datetime
 
 async def test_crawl():
     """Test the crawler's get_results function with some sample data"""
